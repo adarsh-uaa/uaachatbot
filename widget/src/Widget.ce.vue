@@ -9,6 +9,41 @@ const msgs = ref([])                 // local bot conversation
 const live = ref({ messages: [], status: 'open', agent: null })
 const input = ref(''), busy = ref(false), error = ref(''), unread = ref(false)
 const form = reactive({ name: '', email: '', phone: '', message: '', website: '' }) // website = honeypot
+const countryCode = ref('+1')
+const phoneNumber = ref('')
+
+const COUNTRY_CODES = [
+  { code: '+1', flag: '🇺🇸', label: 'US/CA (+1)' },
+  { code: '+44', flag: '🇬🇧', label: 'UK (+44)' },
+  { code: '+91', flag: '🇮🇳', label: 'India (+91)' },
+  { code: '+971', flag: '🇦🇪', label: 'UAE (+971)' },
+  { code: '+966', flag: '🇸🇦', label: 'Saudi (+966)' },
+  { code: '+974', flag: '🇶🇦', label: 'Qatar (+974)' },
+  { code: '+61', flag: '🇦🇺', label: 'Australia (+61)' },
+  { code: '+65', flag: '🇸🇬', label: 'Singapore (+65)' },
+  { code: '+49', flag: '🇩🇪', label: 'Germany (+49)' },
+  { code: '+33', flag: '🇫🇷', label: 'France (+33)' },
+  { code: '+34', flag: '🇪🇸', label: 'Spain (+34)' },
+  { code: '+39', flag: '🇮🇹', label: 'Italy (+39)' },
+  { code: '+31', flag: '🇳🇱', label: 'Netherlands (+31)' },
+  { code: '+41', flag: '🇨🇭', label: 'Switzerland (+41)' },
+  { code: '+353', flag: '🇮🇪', label: 'Ireland (+353)' },
+  { code: '+81', flag: '🇯🇵', label: 'Japan (+81)' },
+  { code: '+82', flag: '🇰🇷', label: 'South Korea (+82)' },
+  { code: '+86', flag: '🇨🇳', label: 'China (+86)' },
+  { code: '+852', flag: '🇭🇰', label: 'Hong Kong (+852)' },
+  { code: '+60', flag: '🇲🇾', label: 'Malaysia (+60)' },
+  { code: '+66', flag: '🇹🇭', label: 'Thailand (+66)' },
+  { code: '+62', flag: '🇮🇩', label: 'Indonesia (+62)' },
+  { code: '+63', flag: '🇵🇭', label: 'Philippines (+63)' },
+  { code: '+84', flag: '🇻🇳', label: 'Vietnam (+84)' },
+  { code: '+64', flag: '🇳🇿', label: 'New Zealand (+64)' },
+  { code: '+27', flag: '🇿🇦', label: 'South Africa (+27)' },
+  { code: '+20', flag: '🇪🇬', label: 'Egypt (+20)' },
+  { code: '+90', flag: '🇹🇷', label: 'Turkey (+90)' },
+  { code: '+55', flag: '🇧🇷', label: 'Brazil (+55)' },
+  { code: '+52', flag: '🇲🇽', label: 'Mexico (+52)' }
+]
 const box = ref(null)
 const storeKey = () => `uaa:${props.siteKey}`
 let token = null, timer = null, lastCount = 0
@@ -266,11 +301,38 @@ async function send() {
     catch (e) { error.value = e.message === 'closed' ? t.value.closed : e.message; input.value = text }
   } else if (mode.value === 'bot') await ask(text)
 }
+async function createTicketWithFallback(phone) {
+  try {
+    return await rpc('widget_create_ticket', {
+      p_site_key: props.siteKey,
+      p_name: form.name,
+      p_email: form.email,
+      p_phone: phone || null,
+      p_message: form.message
+    })
+  } catch (err) {
+    const msg = String(err?.message || '')
+    // Fallback if database has 4-arg function signature in PostgREST schema cache
+    if (msg.includes('schema cache') || msg.includes('Could not find the function') || msg.includes('widget_create_ticket')) {
+      const combinedMsg = phone ? `${form.message}\n\n[Contact Phone: ${phone}]` : form.message
+      return await rpc('widget_create_ticket', {
+        p_site_key: props.siteKey,
+        p_name: form.name,
+        p_email: form.email,
+        p_message: combinedMsg
+      })
+    }
+    throw err
+  }
+}
+
 async function submitForm() {
   error.value = ''
   if (form.website) return                       // bots fill the hidden field
   busy.value = true
   try {
+    const fullPhone = phoneNumber.value.trim() ? `${countryCode.value} ${phoneNumber.value.trim()}` : ''
+    form.phone = fullPhone
     let r
     if (token) {
       // Update existing bot chat ticket with visitor details
@@ -278,26 +340,14 @@ async function submitForm() {
         p_token: token,
         p_name: form.name,
         p_email: form.email,
-        p_phone: form.phone || null,
+        p_phone: fullPhone || null,
         p_message: form.message
       }).catch(async () => {
-        // Fallback to create ticket if function not present
-        return await rpc('widget_create_ticket', {
-          p_site_key: props.siteKey,
-          p_name: form.name,
-          p_email: form.email,
-          p_phone: form.phone || null,
-          p_message: form.message
-        })
+        // Fallback to widget_create_ticket with schema cache fallback
+        return await createTicketWithFallback(fullPhone)
       })
     } else {
-      r = await rpc('widget_create_ticket', {
-        p_site_key: props.siteKey,
-        p_name: form.name,
-        p_email: form.email,
-        p_phone: form.phone || null,
-        p_message: form.message
-      })
+      r = await createTicketWithFallback(fullPhone)
     }
     token = r.token; localStorage.setItem(storeKey(), token)
     mode.value = 'chat'; await poll(); startPolling()
@@ -322,13 +372,16 @@ async function poll() {
 }
 function startPolling() { stopPolling(); timer = setInterval(poll, 4000) }
 function stopPolling() { clearInterval(timer); timer = null }
-function newChat() { localStorage.removeItem(storeKey()); token = null; live.value = { messages: [], status: 'open' }; mode.value = 'bot'; lastCount = 0; form.message = '' }
+function newChat() { localStorage.removeItem(storeKey()); token = null; live.value = { messages: [], status: 'open' }; mode.value = 'bot'; lastCount = 0; form.message = ''; phoneNumber.value = '' }
 function toggle() { open.value = !open.value; if (open.value) { unread.value = false; scroll() } }
 
 onMounted(async () => {
   try {
     cfg.value = await rpc('widget_config', { p_site_key: props.siteKey })
     msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
+    if (cfg.value?.theme?.defaultCountryCode) {
+      countryCode.value = cfg.value.theme.defaultCountryCode
+    }
   } catch { failed.value = true; return }
   token = localStorage.getItem(storeKey())
   if (token) {
@@ -390,7 +443,23 @@ watch(open, v => v && scroll())
           <form v-if="mode === 'form'" class="form" @submit.prevent="submitForm">
             <label>Your full name<input v-model="form.name" required maxlength="80" autocomplete="name" placeholder="Alex Morgan"></label>
             <label>Email address<input v-model="form.email" type="email" required maxlength="160" autocomplete="email" placeholder="alex@example.com"></label>
-            <label>Phone number<input v-model="form.phone" type="tel" maxlength="40" autocomplete="tel" placeholder="+1 (555) 000-0000"></label>
+            <label>Phone number
+              <div class="phone-row">
+                <select v-model="countryCode" class="phone-code-select" aria-label="Country dial code">
+                  <option v-for="c in COUNTRY_CODES" :key="c.code" :value="c.code">
+                    {{ c.flag }} {{ c.code }}
+                  </option>
+                </select>
+                <input
+                  v-model="phoneNumber"
+                  type="tel"
+                  maxlength="25"
+                  autocomplete="tel-national"
+                  placeholder="555-0199"
+                  class="phone-national-input"
+                >
+              </div>
+            </label>
             <label>How can our team help?<textarea v-model="form.message" required maxlength="4000" rows="3" placeholder="Flight details, assistance required…" /></label>
             <input v-model="form.website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
             <p v-if="error" class="err">{{ error }}</p>
@@ -717,7 +786,7 @@ header small {
   gap: 3px;
   color: var(--t);
 }
-.form input, .form textarea {
+.form input, .form textarea, .form select {
   font: inherit;
   font-size: 13px;
   border: 1px solid var(--in-bdr);
@@ -728,9 +797,28 @@ header small {
   width: 100%;
   transition: border-color .15s ease;
 }
-.form input:focus, .form textarea:focus {
+.form input:focus, .form textarea:focus, .form select:focus {
   outline: none;
   border-color: var(--a);
+}
+.phone-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.phone-code-select {
+  width: 105px !important;
+  min-width: 95px !important;
+  flex-shrink: 0 !important;
+  cursor: pointer;
+  padding: 7px 6px !important;
+}
+.phone-national-input {
+  flex: 1 !important;
+  min-width: 0 !important;
+  width: auto !important;
 }
 .hp {
   position: absolute !important;

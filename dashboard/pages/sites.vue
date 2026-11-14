@@ -266,6 +266,7 @@ function ensureFullTheme(t: any) {
     position: t.position || 'right',
     icon: t.icon || 'chat',
     iconUrl: t.iconUrl || '',
+    defaultCountryCode: t.defaultCountryCode || '+1',
     headerBg: t.headerBg || p,
     headerText: t.headerText || '#ffffff',
     headerSubtext: t.headerSubtext || 'rgba(255,255,255,0.85)',
@@ -543,6 +544,53 @@ const ICONS: Record<string, string> = {
                   <option v-for="s in sites.filter(x => x.id !== f.id)" :key="s.id" :value="s.id">{{ s.name }}</option>
                 </select>
                 <button class="btn alt sm" :disabled="!copyFrom" @click="applyFrom">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 1.5 Visitor Phone & Contact Settings -->
+          <div class="card">
+            <h2>Visitor Phone & Contact Settings</h2>
+            <p class="sub" style="margin:0 0 1rem 0">Set the default international country calling code for the visitor request form.</p>
+            <div class="cols">
+              <div>
+                <label>Default Phone Country Code</label>
+                <select v-model="f.theme.defaultCountryCode">
+                  <option value="+1">🇺🇸 +1 (United States & Canada)</option>
+                  <option value="+44">🇬🇧 +44 (United Kingdom)</option>
+                  <option value="+91">🇮🇳 +91 (India)</option>
+                  <option value="+971">🇦🇪 +971 (United Arab Emirates)</option>
+                  <option value="+966">🇸🇦 +966 (Saudi Arabia)</option>
+                  <option value="+974">🇶🇦 +974 (Qatar)</option>
+                  <option value="+61">🇦🇺 +61 (Australia)</option>
+                  <option value="+65">🇸🇬 +65 (Singapore)</option>
+                  <option value="+49">🇩🇪 +49 (Germany)</option>
+                  <option value="+33">🇫🇷 +33 (France)</option>
+                  <option value="+34">🇪🇸 +34 (Spain)</option>
+                  <option value="+39">🇮🇹 +39 (Italy)</option>
+                  <option value="+31">🇳🇱 +31 (Netherlands)</option>
+                  <option value="+41">🇨🇭 +41 (Switzerland)</option>
+                  <option value="+353">🇮🇪 +353 (Ireland)</option>
+                  <option value="+81">🇯🇵 +81 (Japan)</option>
+                  <option value="+82">🇰🇷 +82 (South Korea)</option>
+                  <option value="+86">🇨🇳 +86 (China)</option>
+                  <option value="+852">🇭🇰 +852 (Hong Kong)</option>
+                  <option value="+60">🇲🇾 +60 (Malaysia)</option>
+                  <option value="+66">🇹🇭 +66 (Thailand)</option>
+                  <option value="+62">🇮🇩 +62 (Indonesia)</option>
+                  <option value="+63">🇵🇭 +63 (Philippines)</option>
+                  <option value="+84">🇻🇳 +84 (Vietnam)</option>
+                  <option value="+64">🇳🇿 +64 (New Zealand)</option>
+                  <option value="+27">🇿🇦 +27 (South Africa)</option>
+                  <option value="+20">🇪🇬 +20 (Egypt)</option>
+                  <option value="+90">🇹🇷 +90 (Turkey)</option>
+                  <option value="+55">🇧🇷 +55 (Brazil)</option>
+                  <option value="+52">🇲🇽 +52 (Mexico)</option>
+                </select>
+              </div>
+              <div>
+                <label>Custom Country Code Prefix <small>(e.g. +1, +91, +44)</small></label>
+                <input v-model="f.theme.defaultCountryCode" placeholder="+1">
               </div>
             </div>
           </div>
@@ -970,7 +1018,10 @@ const ICONS: Record<string, string> = {
                       <label>Email address</label>
                       <input class="sim-input" value="alex@example.com" readonly>
                       <label>Phone number</label>
-                      <input class="sim-input" value="+1 (555) 234-5678" readonly>
+                      <div class="row" style="gap:6px">
+                        <span class="sim-input" style="width:auto;padding:6px 10px;font-weight:600;font-size:12px">{{ f.theme.defaultCountryCode || '+1' }}</span>
+                        <input class="sim-input" value="555-234-5678" style="flex:1" readonly>
+                      </div>
                       <label>How can our team help?</label>
                       <textarea class="sim-textarea" rows="2" readonly>Need priority boarding assistance at terminal 1</textarea>
                       <button class="sim-pill solid" style="width:100%;text-align:center;margin-top:.4rem;padding:7px 12px">
