@@ -4,10 +4,9 @@ definePageMeta({ perm: 'dashboard.view' })
 const sb = useSb()
 const auth = useAuth()
 const staff = useStaff()
-const teamsHook = useTeams()
 const { show } = useToast()
 
-const activeTab = ref<'all' | 'teams' | 'members' | 'roles'>('all')
+const activeTab = ref<'members' | 'roles'>('members')
 const canManage = computed(() => auth.can('users.manage'))
 const canViewReal = computed(() => auth.can('users.view_real') || auth.can('users.manage'))
 
@@ -22,7 +21,6 @@ const roles = ['admin', 'manager', 'teamlead', 'employee']
 // Filters
 const search = ref('')
 const filterRole = ref('')
-const filterTeam = ref('')
 
 // Add User Modal State
 const showAddUser = ref(false)
@@ -34,22 +32,11 @@ const userForm = reactive({
   real_name: '',
   pseudo_name: '',
   role: 'employee',
-  team_id: '',
   email_confirm: true
 })
 
-// Add/Edit Team Modal State
-const showTeamModal = ref(false)
-const editingTeam = ref<any>(null)
-const teamForm = reactive({
-  name: '',
-  description: '',
-  color: '#0f7c86',
-  lead_id: ''
-})
-
 async function load() {
-  await Promise.all([staff.load(), teamsHook.load()])
+  await staff.load()
 
   const [uRes, pRes, rpRes, upRes, tktRes] = await Promise.all([
     canViewReal.value
@@ -108,7 +95,6 @@ function openAddUser() {
   userForm.real_name = ''
   userForm.pseudo_name = ''
   userForm.role = 'employee'
-  userForm.team_id = teamsHook.teams.value[0]?.id || ''
   userForm.email_confirm = true
   generatePassword()
   showAddUser.value = true
@@ -121,16 +107,39 @@ async function submitAddUser() {
   }
   addingUser.value = true
   try {
-    await teamsHook.createUser({
-      email: userForm.email,
-      password: userForm.password,
-      real_name: userForm.real_name,
-      pseudo_name: userForm.pseudo_name,
-      role: userForm.role,
-      team_id: userForm.team_id || null,
-      email_confirm: userForm.email_confirm
+    // 1. Call admin_create_user RPC
+    const rpcRes = await sb.rpc('admin_create_user', {
+      p_email: userForm.email,
+      p_password: userForm.password,
+      p_real_name: userForm.real_name,
+      p_pseudo_name: userForm.pseudo_name,
+      p_role: userForm.role,
+      p_team_id: null,
+      p_email_confirm: userForm.email_confirm
     })
-    show(`User "${userForm.pseudo_name}" created successfully (Email Verified)!`, 'ok')
+
+    if (rpcRes.error) {
+      // 2. Fallback to API route if running with service role key
+      try {
+        const session = auth.session.value
+        await $fetch('/api/users/create', {
+          method: 'POST',
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+          body: {
+            email: userForm.email,
+            password: userForm.password,
+            real_name: userForm.real_name,
+            pseudo_name: userForm.pseudo_name,
+            role: userForm.role,
+            email_confirm: userForm.email_confirm
+          }
+        })
+      } catch (apiErr: any) {
+        throw new Error(rpcRes.error.message || apiErr?.data?.message || 'Failed to create user')
+      }
+    }
+
+    show(`User "${userForm.pseudo_name}" created successfully with role ${userForm.role}! (Email Verified)`, 'ok')
     showAddUser.value = false
     await load()
   } catch (err: any) {
@@ -145,8 +154,7 @@ async function saveUser(u: any) {
   const payload: any = {
     pseudo_name: u.pseudo_name,
     role: u.role,
-    is_active: u.is_active,
-    team_id: u.team_id || null
+    is_active: u.is_active
   }
   if (canViewReal.value && u.real_name) {
     payload.real_name = u.real_name
@@ -155,61 +163,8 @@ async function saveUser(u: any) {
   if (error) {
     show(error.message.includes('unique') ? 'That pseudo name is already taken' : error.message, 'err')
   } else {
-    show(`Saved changes for ${u.pseudo_name}`, 'ok')
+    show(`Saved changes for ${u.pseudo_name} (Role: ${u.role})`, 'ok')
     await load()
-  }
-}
-
-function openTeamModal(t?: any) {
-  if (t) {
-    editingTeam.value = t
-    teamForm.name = t.name
-    teamForm.description = t.description || ''
-    teamForm.color = t.color || '#0f7c86'
-    teamForm.lead_id = t.lead_id || ''
-  } else {
-    editingTeam.value = null
-    teamForm.name = ''
-    teamForm.description = ''
-    teamForm.color = '#0f7c86'
-    teamForm.lead_id = ''
-  }
-  showTeamModal.value = true
-}
-
-async function submitTeam() {
-  if (!teamForm.name.trim()) {
-    show('Team name is required', 'err')
-    return
-  }
-  try {
-    if (editingTeam.value) {
-      await teamsHook.updateTeam(editingTeam.value.id, {
-        name: teamForm.name.trim(),
-        description: teamForm.description.trim(),
-        color: teamForm.color,
-        lead_id: teamForm.lead_id || null
-      })
-      show('Team updated successfully', 'ok')
-    } else {
-      await teamsHook.createTeam(teamForm.name.trim(), teamForm.description.trim(), teamForm.color)
-      show('Team created successfully', 'ok')
-    }
-    showTeamModal.value = false
-    await load()
-  } catch (err: any) {
-    show(err.message || 'Error saving team', 'err')
-  }
-}
-
-async function removeTeam(team: any) {
-  if (!confirm(`Delete team "${team.name}"? Members will be unassigned from this team.`)) return
-  try {
-    await teamsHook.deleteTeam(team.id)
-    show('Team deleted', 'ok')
-    await load()
-  } catch (err: any) {
-    show(err.message || 'Error deleting team', 'err')
   }
 }
 
@@ -238,7 +193,6 @@ async function setOvr(uid: string, p: string, v: string) {
 const filteredUsers = computed(() => {
   return users.value.filter(u => {
     if (filterRole.value && u.role !== filterRole.value) return false
-    if (filterTeam.value && (u.team_id || '') !== filterTeam.value) return false
     if (search.value.trim()) {
       const q = search.value.toLowerCase()
       const matchPseudo = (u.pseudo_name || '').toLowerCase().includes(q)
@@ -249,44 +203,20 @@ const filteredUsers = computed(() => {
     return true
   })
 })
-
-const getTeamName = (teamId?: string | null) => {
-  if (!teamId) return 'Unassigned'
-  const found = teamsHook.teams.value.find(t => t.id === teamId)
-  return found ? found.name : 'Unassigned'
-}
-
-const getTeamColor = (teamId?: string | null) => {
-  if (!teamId) return '#5d6b76'
-  const found = teamsHook.teams.value.find(t => t.id === teamId)
-  return found?.color || '#0f7c86'
-}
-
-const membersInTeam = (teamId: string) => {
-  return users.value.filter(u => u.team_id === teamId)
-}
-
-const totalActiveTicketsInTeam = (teamId: string) => {
-  const memberIds = users.value.filter(u => u.team_id === teamId).map(u => u.id)
-  return memberIds.reduce((sum, id) => sum + (ticketStats.value[id] || 0), 0)
-}
 </script>
 
 <template>
-  <div class="teams-page">
-    <div class="row" style="justify-content:space-between;margin-bottom:1rem">
+  <div class="team-page">
+    <div class="row" style="justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.75rem">
       <div>
-        <h1>Teams & Staff</h1>
-        <p class="sub">
-          Manage support teams, staff accounts, roles, and permissions. Visitors and customers only ever see public pseudo names.
+        <h1 style="margin:0 0 .25rem">Team Members & Roles</h1>
+        <p class="sub" style="margin:0">
+          Manage your support staff, assign access roles (Admin, Manager, Team Lead, Employee), and configure permissions. Visitors only see public pseudo names.
         </p>
       </div>
-      <div class="row" v-if="canManage">
+      <div v-if="canManage">
         <button class="btn amber" @click="openAddUser">
-          <strong>+ Add User (Email Verified)</strong>
-        </button>
-        <button class="btn alt" @click="openTeamModal()">
-          + New Team
+          <strong>+ Add Member (Email Verified)</strong>
         </button>
       </div>
     </div>
@@ -294,7 +224,7 @@ const totalActiveTicketsInTeam = (teamId: string) => {
     <!-- Quick Stats Cards -->
     <div class="grid g4" style="margin-bottom:1.25rem">
       <div class="card stat">
-        <small class="sub">Total Staff</small>
+        <small class="sub">Total Team Members</small>
         <b>{{ users.length }}</b>
       </div>
       <div class="card stat green">
@@ -302,8 +232,8 @@ const totalActiveTicketsInTeam = (teamId: string) => {
         <b>{{ users.filter(u => u.is_active).length }}</b>
       </div>
       <div class="card stat amber">
-        <small class="sub">Support Teams</small>
-        <b>{{ teamsHook.teams.value.length }}</b>
+        <small class="sub">Administrators</small>
+        <b>{{ users.filter(u => u.role === 'admin').length }}</b>
       </div>
       <div class="card stat">
         <small class="sub">Tickets in Progress</small>
@@ -311,114 +241,18 @@ const totalActiveTicketsInTeam = (teamId: string) => {
       </div>
     </div>
 
-    <!-- Navigation Tabs -->
+    <!-- Navigation Tabs: Members vs Roles -->
     <div class="tabs" style="margin-bottom:1.25rem">
-      <button class="tab" :class="{ on: activeTab === 'all' }" @click="activeTab = 'all'">
-        🏢 All Overview (Teams & Directory)
-      </button>
-      <button class="tab" :class="{ on: activeTab === 'teams' }" @click="activeTab = 'teams'">
-        🏬 Teams & Departments ({{ teamsHook.teams.value.length }})
-      </button>
       <button class="tab" :class="{ on: activeTab === 'members' }" @click="activeTab = 'members'">
-        👥 Members Directory ({{ filteredUsers.length }})
+        👥 Team Members ({{ filteredUsers.length }})
       </button>
       <button class="tab" :class="{ on: activeTab === 'roles' }" @click="activeTab = 'roles'">
         🔒 Roles & Permissions Matrix
       </button>
     </div>
 
-    <!-- SECTION: TEAMS & DEPARTMENTS (Shown in 'all' and 'teams' tabs) -->
-    <div v-if="activeTab === 'all' || activeTab === 'teams'" style="margin-bottom:2rem">
-      <div class="row" style="justify-content:space-between;margin-bottom:1rem">
-        <div>
-          <h2 style="margin:0 0 .2rem">Support Teams & Departments</h2>
-          <p class="sub" style="margin:0">
-            Functional airport units with dedicated leads and member assignments. Click a department card to filter members below.
-          </p>
-        </div>
-        <button v-if="canManage" class="btn amber" @click="openTeamModal()">
-          + New Team
-        </button>
-      </div>
-
-      <div class="grid g2">
-        <div
-          v-for="team in teamsHook.teams.value"
-          :key="team.id"
-          class="card team-card"
-          :class="{ 'team-active-filter': filterTeam === team.id }"
-          :style="{ borderTop: `4px solid ${team.color || '#0f7c86'}` }"
-          @click="filterTeam = (filterTeam === team.id ? '' : team.id)"
-          style="cursor:pointer"
-        >
-          <div class="row" style="justify-content:space-between;align-items:flex-start">
-            <div>
-              <h3 style="margin:0 0 .3rem;display:flex;align-items:center;gap:.5rem">
-                <span class="team-color-dot" :style="{ backgroundColor: team.color || '#0f7c86' }" />
-                {{ team.name }}
-                <span v-if="filterTeam === team.id" class="chip" style="background:#0f7c86;color:#ffffff;font-size:.7rem">Active Filter</span>
-              </h3>
-              <p class="sub" style="margin:0">{{ team.description || 'No description provided.' }}</p>
-            </div>
-            <div class="row" v-if="canManage" @click.stop>
-              <button class="btn sm alt" @click="openTeamModal(team)">Edit</button>
-              <button class="btn sm danger" @click="removeTeam(team)">Delete</button>
-            </div>
-          </div>
-
-          <hr style="border:0;border-top:1px solid var(--line);margin:.75rem 0">
-
-          <div class="cols" style="font-size:.9rem;margin-bottom:.75rem">
-            <div>
-              <small class="sub">Team Lead:</small><br>
-              <strong>{{ team.lead_id ? staff.label(team.lead_id) : 'Not assigned' }}</strong>
-            </div>
-            <div>
-              <small class="sub">Team Members:</small><br>
-              <strong>{{ membersInTeam(team.id).length }} staff</strong>
-            </div>
-            <div>
-              <small class="sub">Active Tickets:</small><br>
-              <strong>{{ totalActiveTicketsInTeam(team.id) }} open/claimed</strong>
-            </div>
-          </div>
-
-          <div>
-            <small class="sub" style="display:block;margin-bottom:.3rem">Assigned Members:</small>
-            <div class="row" style="gap:.4rem;flex-wrap:wrap">
-              <span
-                v-for="m in membersInTeam(team.id)"
-                :key="m.id"
-                class="chip"
-                style="background:var(--paper);border:1px solid var(--line)"
-              >
-                {{ m.pseudo_name }} <small>({{ m.role }})</small>
-              </span>
-              <span v-if="membersInTeam(team.id).length === 0" class="sub" style="font-size:.85rem">
-                No members assigned yet.
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- SECTION: MEMBERS & DIRECTORY (Shown in 'all' and 'members' tabs) -->
-    <div v-if="activeTab === 'all' || activeTab === 'members'" style="margin-bottom:2rem">
-      <div class="row" style="justify-content:space-between;margin-bottom:1rem">
-        <div>
-          <h2 style="margin:0 0 .2rem">Staff Directory & Team Assignments</h2>
-          <p class="sub" style="margin:0">
-            Assign staff members to support departments, configure public pseudo names, and manage access roles.
-          </p>
-        </div>
-        <div v-if="canManage">
-          <button class="btn amber" @click="openAddUser">
-            <strong>+ Add User (Email Verified)</strong>
-          </button>
-        </div>
-      </div>
-
+    <!-- TAB 1: MEMBERS DIRECTORY -->
+    <div v-if="activeTab === 'members'">
       <!-- Filter and Search Bar -->
       <div class="card row" style="gap:1rem;margin-bottom:1rem;padding:.75rem 1rem">
         <div class="grow" style="min-width:240px">
@@ -428,44 +262,37 @@ const totalActiveTicketsInTeam = (teamId: string) => {
             aria-label="Search members"
           >
         </div>
-        <div style="width:160px">
+        <div style="width:180px">
           <select v-model="filterRole" aria-label="Filter by role">
             <option value="">All Roles</option>
             <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
           </select>
         </div>
-        <div style="width:220px">
-          <select v-model="filterTeam" aria-label="Filter by team">
-            <option value="">All Support Teams</option>
-            <option v-for="t in teamsHook.teams.value" :key="t.id" :value="t.id">{{ t.name }}</option>
-          </select>
-        </div>
         <button
-          v-if="search || filterRole || filterTeam"
+          v-if="search || filterRole"
           class="btn sm alt"
-          @click="search = ''; filterRole = ''; filterTeam = ''"
+          @click="search = ''; filterRole = ''"
         >
           Reset Filters
         </button>
       </div>
 
       <!-- Members Table -->
-      <div class="card scroll">
+      <div class="card scroll" style="padding:0;overflow:hidden">
         <table>
           <thead>
             <tr>
               <th>Status</th>
               <th>Pseudo Name (Public)</th>
               <th v-if="canViewReal">Real Name (Private)</th>
-              <th>Role</th>
-              <th>Assigned Team</th>
+              <th>Assigned Role</th>
               <th>Active Tickets</th>
               <th v-if="canManage">Actions</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="filteredUsers.length === 0">
-              <td colspan="7" class="empty">No team members match your filter criteria.</td>
+              <td colspan="6" class="empty">No team members match your filter criteria.</td>
             </tr>
             <tr v-for="u in filteredUsers" :key="u.id">
               <td>
@@ -490,26 +317,11 @@ const totalActiveTicketsInTeam = (teamId: string) => {
               </td>
               <td>
                 <template v-if="canManage">
-                  <select v-model="u.role" style="min-width:110px">
+                  <select v-model="u.role" style="min-width:120px">
                     <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
                   </select>
                 </template>
                 <span v-else class="chip role">{{ u.role }}</span>
-              </td>
-              <td>
-                <template v-if="canManage">
-                  <select v-model="u.team_id" style="min-width:170px">
-                    <option :value="null">Unassigned</option>
-                    <option v-for="t in teamsHook.teams.value" :key="t.id" :value="t.id">{{ t.name }}</option>
-                  </select>
-                </template>
-                <span
-                  v-else
-                  class="chip team-chip"
-                  :style="{ borderColor: getTeamColor(u.team_id), color: getTeamColor(u.team_id) }"
-                >
-                  {{ getTeamName(u.team_id) }}
-                </span>
               </td>
               <td>
                 <span class="chip" :class="(ticketStats[u.id] || 0) > 0 ? 'claimed' : ''">
@@ -533,7 +345,7 @@ const totalActiveTicketsInTeam = (teamId: string) => {
         <div class="row" style="justify-content:space-between">
           <h2>
             Permission Overrides for <strong>{{ sel.pseudo_name }}</strong>
-            <span class="chip role" style="margin-left:.5rem">{{ sel.role }}</span>
+            <span class="chip role" style="margin-left:.5rem">Role: {{ sel.role }}</span>
           </h2>
           <button class="btn sm alt" @click="sel = null">Close</button>
         </div>
@@ -545,7 +357,7 @@ const totalActiveTicketsInTeam = (teamId: string) => {
             <thead>
               <tr>
                 <th>Permission</th>
-                <th>Description</th>
+                <th>Role Baseline</th>
                 <th>Custom Override</th>
               </tr>
             </thead>
@@ -579,24 +391,57 @@ const totalActiveTicketsInTeam = (teamId: string) => {
       </div>
     </div>
 
-    <!-- TAB 3: ROLES & PERMISSIONS MATRIX -->
+    <!-- TAB 2: ROLES & PERMISSIONS MATRIX -->
     <div v-if="activeTab === 'roles'">
-      <div class="card scroll">
-        <h2>Global Role Capabilities</h2>
-        <p class="sub">
-          Control what each role can access across the dashboard. Changes apply to all users with that role who do not have an individual override.
+      <div class="card scroll" style="margin-bottom:1.25rem">
+        <h2 style="margin:0 0 .25rem">Role Definitions & Access Levels</h2>
+        <p class="sub" style="margin-bottom:1rem">
+          Every team member is assigned one of four roles. Roles determine baseline capabilities across tickets, sites, users, and audit data.
         </p>
+
+        <div class="grid g4" style="margin-bottom:1.5rem">
+          <div class="card" style="background:#f8fafc;border-top:3px solid #0f172a">
+            <h3 style="margin:0 0 .3rem">admin</h3>
+            <p class="sub" style="font-size:.84rem;margin:0">
+              Full administrative control. Can manage websites, bot rules, canned replies, users, and all tickets.
+            </p>
+          </div>
+          <div class="card" style="background:#f8fafc;border-top:3px solid #2563eb">
+            <h3 style="margin:0 0 .3rem">manager</h3>
+            <p class="sub" style="font-size:.84rem;margin:0">
+              Operations manager. Can view all tickets, reassign tickets, manage canned replies, view private real names.
+            </p>
+          </div>
+          <div class="card" style="background:#f8fafc;border-top:3px solid #0f7c86">
+            <h3 style="margin:0 0 .3rem">teamlead</h3>
+            <p class="sub" style="font-size:.84rem;margin:0">
+              Shift / team lead. Can claim, reassign, close tickets, and create canned replies and keyword rules.
+            </p>
+          </div>
+          <div class="card" style="background:#f8fafc;border-top:3px solid #64748b">
+            <h3 style="margin:0 0 .3rem">employee</h3>
+            <p class="sub" style="font-size:.84rem;margin:0">
+              Frontline assistance agent. Can claim open tickets, reply to visitors, and view their assigned tickets.
+            </p>
+          </div>
+        </div>
+
+        <h3 style="margin:0 0 .5rem">Global Permissions Matrix</h3>
+        <p class="sub" style="margin-bottom:1rem">
+          Check or uncheck boxes to adjust permissions for an entire role. Changes apply immediately to all users with that role.
+        </p>
+
         <table>
           <thead>
             <tr>
-              <th>Permission</th>
+              <th>Permission Key</th>
               <th>Description</th>
               <th v-for="r in roles" :key="r" style="text-align:center">{{ r }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="p in perms" :key="p.key">
-              <td><b>{{ p.key }}</b></td>
+              <td><code>{{ p.key }}</code></td>
               <td><small class="sub">{{ p.description }}</small></td>
               <td v-for="r in roles" :key="r" style="text-align:center">
                 <input
@@ -604,7 +449,7 @@ const totalActiveTicketsInTeam = (teamId: string) => {
                   :checked="roleHas(r, p.key)"
                   :disabled="!canManage || r === 'admin'"
                   :aria-label="`${r} ${p.key}`"
-                  style="width:auto"
+                  style="width:auto;cursor:pointer"
                   @change="toggleRole(r, p.key)"
                 >
               </td>
@@ -614,11 +459,11 @@ const totalActiveTicketsInTeam = (teamId: string) => {
       </div>
     </div>
 
-    <!-- MODAL: ADD USER (EMAIL VERIFIED DIRECTLY) -->
+    <!-- MODAL: ADD MEMBER (EMAIL VERIFIED DIRECTLY) -->
     <div v-if="showAddUser" class="modal-backdrop" @click.self="showAddUser = false">
       <div class="modal card" role="dialog" aria-modal="true" aria-labelledby="add-user-title">
         <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
-          <h2 id="add-user-title" style="margin:0">Add User Directly</h2>
+          <h2 id="add-user-title" style="margin:0">Add Team Member</h2>
           <button class="x-close" @click="showAddUser = false" aria-label="Close dialog">×</button>
         </div>
 
@@ -640,25 +485,10 @@ const totalActiveTicketsInTeam = (teamId: string) => {
               >
             </div>
             <div>
-              <label for="u-pw">Password <span style="color:var(--red)">*</span></label>
-              <div class="row" style="gap:4px">
-                <input
-                  id="u-pw"
-                  v-model="userForm.password"
-                  :type="showPassword ? 'text' : 'password'"
-                  required
-                  minlength="6"
-                  placeholder="Min 6 characters"
-                  autocomplete="new-password"
-                  class="grow"
-                >
-                <button type="button" class="btn sm alt" @click="showPassword = !showPassword">
-                  {{ showPassword ? 'Hide' : 'Show' }}
-                </button>
-                <button type="button" class="btn sm alt" title="Generate random password" @click="generatePassword">
-                  Generate
-                </button>
-              </div>
+              <label for="u-role">Role <span style="color:var(--red)">*</span></label>
+              <select id="u-role" v-model="userForm.role">
+                <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
+              </select>
             </div>
           </div>
 
@@ -669,111 +499,56 @@ const totalActiveTicketsInTeam = (teamId: string) => {
                 id="u-real"
                 v-model="userForm.real_name"
                 required
-                placeholder="Sarah Jenkins"
-                @blur="autoFillPseudo"
+                placeholder="e.g. Sarah Jenkins"
+                @input="autoFillPseudo"
               >
-              <small class="sub">Visible only to admins and managers.</small>
             </div>
             <div>
-              <label for="u-pseudo">Pseudo Name (Public) <span style="color:var(--red)">*</span></label>
+              <label for="u-pseudo">Pseudo Name (Public to Visitors) <span style="color:var(--red)">*</span></label>
               <input
                 id="u-pseudo"
                 v-model="userForm.pseudo_name"
                 required
-                placeholder="Sarah J."
+                placeholder="e.g. Sarah J."
               >
-              <small class="sub">Seen by passengers in the chat and on tickets.</small>
             </div>
           </div>
 
-          <div class="cols" style="margin-top:.75rem">
-            <div>
-              <label for="u-role">Role</label>
-              <select id="u-role" v-model="userForm.role">
-                <option v-for="r in roles" :key="r" :value="r">{{ r }}</option>
-              </select>
-            </div>
-            <div>
-              <label for="u-team">Support Team / Department</label>
-              <select id="u-team" v-model="userForm.team_id">
-                <option :value="null">Unassigned</option>
-                <option v-for="t in teamsHook.teams.value" :key="t.id" :value="t.id">{{ t.name }}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Email Verified Switch / Checkbox -->
-          <div class="card email-verified-box" style="margin-top:1rem;background:#f0fbf6;border-color:#b8ebd0">
-            <label style="margin:0;font-weight:700;display:flex;align-items:center;gap:.6rem;cursor:pointer">
+          <div style="margin-top:.75rem">
+            <label for="u-pw">Temporary Password <span style="color:var(--red)">*</span></label>
+            <div class="row" style="gap:.5rem">
               <input
-                type="checkbox"
-                v-model="userForm.email_confirm"
-                style="width:18px;height:18px;accent-color:var(--green)"
+                id="u-pw"
+                :type="showPassword ? 'text' : 'password'"
+                v-model="userForm.password"
+                required
+                style="flex:1"
+                placeholder="At least 6 characters"
               >
-              <span>
-                <strong style="color:var(--green)">Email Verified (Instant Sign-In)</strong>
-                <small style="display:block;font-weight:400;color:var(--ink2)">
-                  Bypasses email verification. The user can sign in immediately at <code>/login</code> with the email and password specified above.
-                </small>
-              </span>
+              <button type="button" class="btn alt sm" @click="generatePassword">
+                Generate
+              </button>
+              <button type="button" class="btn alt sm" @click="showPassword = !showPassword">
+                {{ showPassword ? 'Hide' : 'Show' }}
+              </button>
+              <button type="button" class="btn alt sm" :disabled="!userForm.password" @click="copy(userForm.password).then(() => show('Password copied to clipboard!'))">
+                Copy
+              </button>
+            </div>
+          </div>
+
+          <div class="card" style="background:#f0fdf4;border-color:#bbf7d0;margin-top:1rem;padding:.75rem 1rem">
+            <label style="margin:0;font-weight:600;color:#166534;display:inline-flex;align-items:center;gap:.5rem;cursor:pointer">
+              <input type="checkbox" v-model="userForm.email_confirm" style="width:auto;cursor:pointer">
+              <span>Email Verified (Recommended: user can sign in immediately without confirmation email)</span>
             </label>
           </div>
 
-          <div class="row" style="justify-content:flex-end;margin-top:1.25rem">
+          <div class="row" style="justify-content:flex-end;margin-top:1.25rem;gap:.5rem">
             <button type="button" class="btn alt" @click="showAddUser = false">Cancel</button>
             <button type="submit" class="btn amber" :disabled="addingUser">
-              {{ addingUser ? 'Creating User…' : 'Create & Verify User' }}
+              {{ addingUser ? 'Creating Member…' : 'Create Team Member' }}
             </button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- MODAL: CREATE / EDIT TEAM -->
-    <div v-if="showTeamModal" class="modal-backdrop" @click.self="showTeamModal = false">
-      <div class="modal card" role="dialog" aria-modal="true" aria-labelledby="team-modal-title">
-        <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
-          <h2 id="team-modal-title" style="margin:0">{{ editingTeam ? 'Edit Team' : 'Create Support Team' }}</h2>
-          <button class="x-close" @click="showTeamModal = false" aria-label="Close dialog">×</button>
-        </div>
-
-        <form @submit.prevent="submitTeam">
-          <label for="t-name">Team Name <span style="color:var(--red)">*</span></label>
-          <input
-            id="t-name"
-            v-model="teamForm.name"
-            required
-            placeholder="e.g. Passenger Assistance (PRM)"
-          >
-
-          <label for="t-desc">Description</label>
-          <textarea
-            id="t-desc"
-            v-model="teamForm.description"
-            rows="2"
-            placeholder="Special assistance, mobility, wheelchair service, etc."
-          />
-
-          <div class="cols" style="margin-top:.75rem">
-            <div>
-              <label for="t-color">Theme Color</label>
-              <div class="row" style="gap:.5rem">
-                <input id="t-color" type="color" v-model="teamForm.color" style="width:45px;height:38px;padding:2px">
-                <input v-model="teamForm.color" style="width:120px">
-              </div>
-            </div>
-            <div v-if="editingTeam">
-              <label for="t-lead">Team Lead</label>
-              <select id="t-lead" v-model="teamForm.lead_id">
-                <option value="">No Team Lead</option>
-                <option v-for="u in users" :key="u.id" :value="u.id">{{ u.pseudo_name }} ({{ u.role }})</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="row" style="justify-content:flex-end;margin-top:1.25rem">
-            <button type="button" class="btn alt" @click="showTeamModal = false">Cancel</button>
-            <button type="submit" class="btn amber">Save Team</button>
           </div>
         </form>
       </div>
@@ -796,28 +571,6 @@ const totalActiveTicketsInTeam = (teamId: string) => {
 .status-dot.offline {
   background-color: var(--muted);
 }
-.team-chip {
-  background: #fff;
-  border: 1px solid currentColor;
-  font-weight: 600;
-}
-.team-color-dot {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-}
-.team-card {
-  transition: transform .15s ease, box-shadow .15s ease;
-}
-.team-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
-}
-.team-active-filter {
-  outline: 2px solid #0f7c86;
-  background: #f0fdfa !important;
-}
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -830,7 +583,7 @@ const totalActiveTicketsInTeam = (teamId: string) => {
   padding: 1rem;
 }
 .modal {
-  max-width: 620px;
+  max-width: 600px;
   width: 100%;
   max-height: 90vh;
   overflow-y: auto;
@@ -855,4 +608,3 @@ const totalActiveTicketsInTeam = (teamId: string) => {
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 </style>
-
