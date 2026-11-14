@@ -95,7 +95,63 @@ const style = computed(() => [
   `--lnk-txt:${th.value.linkText}`
 ].join(';'))
 
-const buttons = computed(() => (cfg.value?.rules || []).filter(r => r.button_label))
+const buttons = computed(() => {
+  const list = (cfg.value?.rules?.length) ? cfg.value.rules : DEFAULT_RULES
+  return list.filter(r => r.button_label && r.button_label !== 'Hello')
+})
+
+const DEFAULT_RULES = [
+  {
+    name: 'Greetings & Welcome',
+    keywords: ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'start', 'greetings', 'help', 'howdy'],
+    match_type: 'contains',
+    action: 'reply',
+    response: 'Hello! Welcome to our airport assistance desk. How can we help you today? You can ask about wheelchair assistance, baggage, flight details, or connect directly with our team.',
+    button_label: 'Hello'
+  },
+  {
+    name: 'Wheelchair & Mobility (PRM)',
+    keywords: ['wheelchair', 'mobility', 'prm', 'disabled', 'disability', 'handicap', 'walking', 'elderly', 'senior', 'stretcher', 'ramp', 'special assistance', 'escort', 'buggy', 'electric cart', 'accessible'],
+    match_type: 'contains',
+    action: 'reply',
+    response: 'We provide dedicated assistance for passengers with reduced mobility (PRM) free of charge. Our team can meet you at terminal entry, assist through check-in, security, and boarding. Please book at least 48 hours in advance for priority scheduling.',
+    button_label: 'Wheelchair assistance'
+  },
+  {
+    name: 'Baggage & Lost Items',
+    keywords: ['baggage', 'luggage', 'bags', 'bag', 'suitcase', 'lost bag', 'lost luggage', 'delayed baggage', 'damaged bag', 'carousel', 'lost property', 'lost and found', 'lost item', 'lost my', 'left behind', 'left luggage'],
+    match_type: 'contains',
+    action: 'reply',
+    response: 'For baggage retrieval, delayed luggage, or items left inside the terminal, our Lost Property & Baggage desk is located in the Arrivals Hall near Carousel 3. Would you like to connect with our team to report a lost item?',
+    button_label: 'Lost baggage & items'
+  },
+  {
+    name: 'Flight & Gate Info',
+    keywords: ['flight', 'gate', 'terminal', 'boarding', 'check in', 'checkin', 'check-in', 'delay', 'departure', 'arrival', 'boarding pass', 'counter', 'security', 'fast track', 'customs', 'passport'],
+    match_type: 'contains',
+    action: 'reply',
+    response: 'Check-in desks open 3 hours prior to international flights and 2 hours for domestic flights. Live gate assignments and flight schedules are displayed on terminal screens throughout the airport.',
+    button_label: 'Flight & Gate info'
+  },
+  {
+    name: 'Terminal Amenities & Wi-Fi',
+    keywords: ['wifi', 'wi-fi', 'internet', 'restroom', 'restrooms', 'toilet', 'toilets', 'bathroom', 'washroom', 'food', 'restaurant', 'cafe', 'coffee', 'lounge', 'lounges', 'atm', 'cash', 'money', 'charging', 'charger', 'parking', 'taxi', 'cab', 'bus', 'train', 'water', 'smoking', 'prayer'],
+    match_type: 'contains',
+    action: 'reply',
+    response: 'Free high-speed airport Wi-Fi is available across all terminals. Restrooms, charging stations, prayer rooms, dining, and airline lounges are located along the central concourses.',
+    button_label: 'Terminal amenities'
+  },
+  {
+    name: 'Talk to Support Team',
+    keywords: ['human', 'agent', 'person', 'staff', 'representative', 'talk to someone', 'speak to someone', 'talk to team', 'connect', 'live agent', 'operator', 'call me', 'urgent', 'real person', 'help me'],
+    match_type: 'contains',
+    action: 'handoff',
+    response: 'I would be happy to connect you with our assistance team. Please fill in your details below so an agent can assist you right away:',
+    button_label: 'Talk to our team'
+  }
+]
+
+const showEscalateOption = computed(() => mode.value === 'bot' && msgs.value.length > 1 && !msgs.value.some(m => m.handoff))
 const ICONS = {
   chat: 'M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z',
   plane: 'M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z',
@@ -114,8 +170,9 @@ async function rpc(name, args) {
 const norm = s => ' ' + s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '
 function match(text) {
   const n = norm(text)
-  for (const r of cfg.value.rules) {
-    for (const k of r.keywords) {
+  const rules = (cfg.value?.rules?.length) ? cfg.value.rules : DEFAULT_RULES
+  for (const r of rules) {
+    for (const k of (r.keywords || [])) {
       const kk = norm(k)
       if (r.match_type === 'exact' ? n === kk : n.includes(kk)) return r
     }
@@ -126,8 +183,8 @@ const scroll = () => nextTick(() => { if (box.value) box.value.scrollTop = box.v
 const push = (from, text, extra = {}) => { msgs.value.push({ from, text, ...extra }); scroll() }
 
 function answer(rule) {
-  if (rule.action === 'handoff') { push('bot', rule.response); startForm(); return }
-  const link = rule.link_url || (rule.action === 'faq_link' ? cfg.value.faq_url : null)
+  if (rule.action === 'handoff') { push('bot', rule.response, { handoff: true }); startForm(); return }
+  const link = rule.link_url || (rule.action === 'faq_link' ? cfg.value?.faq_url : null)
   push('bot', rule.response, link ? { link, label: rule.button_label || 'Open link' } : {})
 }
 async function ask(text, rule) {
@@ -152,10 +209,36 @@ async function ask(text, rule) {
       await poll()
       return
     }
+
+    // Check if backend returned a fallback response
+    const isFallback = res?.handoff && (
+      !res?.reply ||
+      res?.reply.toLowerCase().includes('could not find an answer') ||
+      res?.reply === t.value.fallback
+    )
+
+    // If server fell back, check client-side default keyword rules before presenting fallback
+    if (isFallback) {
+      const clientRule = rule || match(text)
+      if (clientRule) {
+        if (clientRule.action === 'handoff') {
+          push('bot', clientRule.response, { handoff: true })
+          startForm()
+        } else {
+          const link = clientRule.link_url || (clientRule.action === 'faq_link' ? cfg.value?.faq_url : null)
+          push('bot', clientRule.response, link ? { link, label: clientRule.button_label || 'Open link' } : {})
+        }
+        return
+      }
+    }
+
     // Display bot reply
     if (res?.reply) {
       const link = res.link_url || null
-      push('bot', res.reply, {
+      const replyMsg = isFallback
+        ? (t.value.fallback || 'I could not find an automated answer for that. Would you like to connect with our support team? Please share your details below.')
+        : res.reply
+      push('bot', replyMsg, {
         ...(link ? { link, label: res.button_label || 'Open link' } : {}),
         ...(res.handoff ? { handoff: true } : {})
       })
@@ -165,7 +248,10 @@ async function ask(text, rule) {
     const r = rule || match(text)
     rpc('widget_log_query', { p_site_key: props.siteKey, p_query: text, p_rule: r?.id || null, p_matched: !!r }).catch(() => {})
     if (r) answer(r)
-    else push('bot', t.value.fallback, { handoff: true })
+    else {
+      const fallbackMsg = t.value.fallback || 'I could not find an automated answer for that. Would you like to connect with our support team? Please share your details below.'
+      push('bot', fallbackMsg, { handoff: true })
+    }
   } finally {
     busy.value = false
   }
@@ -283,16 +369,24 @@ watch(open, v => v && scroll())
           <div v-for="(m, i) in msgs" :key="i" class="m" :class="m.from">
             {{ m.text }}
             <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="lnk">{{ m.label }} →</a>
-            <button v-if="m.handoff" class="pill solid" @click="startForm">{{ t.handoff }}</button>
+            <button
+              v-if="m.handoff && i === msgs.length - 1"
+              class="pill solid handoff-btn"
+              @click="startForm"
+            >
+              {{ t.handoff || 'Connect with our team' }}
+            </button>
           </div>
           <div v-if="msgs.length < 2 && buttons.length" class="chips">
-            <button v-for="b in buttons" :key="b.id" class="pill" @click="ask(b.button_label, b)">
+            <button v-for="b in buttons" :key="b.id || b.button_label" class="pill" @click="ask(b.button_label, b)">
               {{ b.button_label }}
             </button>
           </div>
-          <button v-if="msgs.length > 1 && mode === 'bot'" class="pill solid" @click="startForm">
-            {{ t.handoff }}
-          </button>
+          <div v-if="showEscalateOption" class="escalate-row">
+            <button class="txt-btn" @click="startForm">
+              Need live assistance? Connect with our team →
+            </button>
+          </div>
           <form v-if="mode === 'form'" class="form" @submit.prevent="submitForm">
             <label>Your full name<input v-model="form.name" required maxlength="80" autocomplete="name" placeholder="Alex Morgan"></label>
             <label>Email address<input v-model="form.email" type="email" required maxlength="160" autocomplete="email" placeholder="alex@example.com"></label>
@@ -577,6 +671,31 @@ header small {
 }
 .chips .pill {
   margin: 0;
+}
+.handoff-btn {
+  display: block;
+  margin-top: 8px;
+  width: auto;
+}
+.escalate-row {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+.txt-btn {
+  background: none;
+  border: none;
+  color: var(--sys-txt);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 8px;
+  text-decoration: underline;
+  opacity: 0.85;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.txt-btn:hover {
+  opacity: 1;
+  color: var(--a);
 }
 
 /* Ticket Form Inside Widget */

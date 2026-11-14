@@ -57,10 +57,14 @@ begin
   end if;
 end $$;
 
--- 3. Add visitor_phone to tickets table and relax constraints for bot sessions
+-- 3. Add visitor_phone to tickets table and ensure cascading site delete
 alter table tickets add column if not exists visitor_phone text;
 alter table tickets alter column visitor_name set default 'Visitor';
 alter table tickets alter column visitor_email drop not null;
+alter table tickets
+  drop constraint if exists tickets_site_id_fkey,
+  add constraint tickets_site_id_fkey
+    foreign key (site_id) references sites(id) on delete cascade;
 
 -- 4. Overload/Update widget_create_ticket to accept visitor_phone
 create or replace function widget_create_ticket(
