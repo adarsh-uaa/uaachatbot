@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+*/node_modules/
+.pnp
+.pnp.js
+
+# Nuxt 3 & Vite Build Outputs
+.nuxt/
+*/.nuxt/
+.output/
+*/.output/
+.nitro/
+*/.nitro/
+dist/
+widget/dist/
+
+# Environment files and secrets (keep .env.example)
+.env
+.env.*
+!.env.example
+*.env
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# IDE / Editor configuration & AI Agent artifacts
+.antigravity-ide/
+.gemini/
+.claude/
+.copilot/
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary and Cache directories
+.cache/
+coverage/
+*.lcov
+.nyc_output/
+
+# Supabase CLI local artifacts
+.supabase/
+
