@@ -6,11 +6,34 @@ const me = computed(() => auth.session.value?.user.id)
 const mine = computed(() => t.value?.claimed_by === me.value)
 const lead = computed(() => auth.can('tickets.reassign'))
 
+// Form submission check & reply warning state
+const showUnfilledWarningModal = ref(false)
+const acknowledgedUnfilled = ref(false)
+
+const isFormSubmitted = computed(() => {
+  if (!t.value) return false
+  if (t.value.form_submitted === true) return true
+  const email = String(t.value.visitor_email || '').trim().toLowerCase()
+  const name = String(t.value.visitor_name || '').trim()
+  const phone = String(t.value.visitor_phone || '').trim()
+
+  const hasRealEmail = email.length > 0 && !email.includes('@uaa.chat') && !email.includes('anonymous')
+  const hasRealName = name.length > 0 && !name.startsWith('Passenger #') && name !== 'Passenger' && name !== 'Visitor'
+  const hasPhone = phone.length > 0
+
+  return (hasRealEmail && hasRealName) || (hasPhone && hasRealName)
+})
+
 async function load() {
   const a = await sb.from('tickets').select('*, sites(name)').eq('id', id).maybeSingle()
   if (!a.data) { error.value = 'Ticket not found, or you no longer have access to it.'; t.value = null; return }
   t.value = a.data
   msgs.value = (await sb.from('ticket_messages').select('*').eq('ticket_id', id).order('created_at')).data || []
+  if (a.data.unread_by_staff) {
+    sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).then(() => {
+      if (t.value) t.value.unread_by_staff = false
+    })
+  }
   nextTick(() => { const el = document.getElementById('thread'); if (el) el.scrollTop = el.scrollHeight })
 }
 async function act(fn: string, args: any, ok: string) {
@@ -20,12 +43,49 @@ async function act(fn: string, args: any, ok: string) {
 }
 async function send() {
   if (!body.value.trim()) return
+  // If passenger has NOT filled form data, warn the team before sending live reply
+  if (!note.value && !isFormSubmitted.value && !acknowledgedUnfilled.value) {
+    showUnfilledWarningModal.value = true
+    return
+  }
+  await doSend()
+}
+async function doSend() {
   const text = body.value
   await act('staff_reply', { p_ticket: id, p_body: text, p_internal: note.value }, note.value ? 'Note saved' : 'Reply sent')
-  if (!error.value) body.value = ''
+  if (!error.value) {
+    body.value = ''
+    sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).catch(() => {})
+  }
+  showUnfilledWarningModal.value = false
+}
+function confirmSendUnfilled() {
+  acknowledgedUnfilled.value = true
+  doSend()
 }
 async function copyTicket() {
   show((await copy(`UAA-${t.value.ticket_no} · ${t.value.visitor_name} <${t.value.visitor_email}>\n${msgs.value.filter(m => !m.is_internal).map(m => `${m.sender}: ${m.body}`).join('\n')}`)) ? 'Conversation copied' : 'Copy failed', 'ok')
+}
+
+const confirmDeleteModal = ref(false)
+const isDeleting = ref(false)
+
+async function deleteChat() {
+  isDeleting.value = true
+  try {
+    const { error: rpcErr } = await sb.rpc('delete_ticket', { p_ticket: id })
+    if (rpcErr) {
+      const { error: dirErr } = await sb.from('tickets').delete().eq('id', id)
+      if (dirErr) throw dirErr
+    }
+    show(`Ticket UAA-${t.value.ticket_no} deleted successfully`, 'ok')
+    navigateTo('/tickets')
+  } catch (err: any) {
+    show('Failed to delete: ' + (err?.message || 'Database error'), 'err')
+  } finally {
+    isDeleting.value = false
+    confirmDeleteModal.value = false
+  }
 }
 function useCanned(e: any) { const c = canned.value.find(x => x.id === e.target.value); if (c) body.value = c.body; e.target.value = '' }
 const who = (m: any) => m.sender === 'visitor' ? (t.value?.visitor_name || 'Passenger') : m.sender === 'staff' ? staff.label(m.author_id) : m.sender === 'bot' ? 'Bot Assistant' : 'System'
@@ -83,6 +143,12 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
             <span class="chip" :class="t.status">
               {{ t.status === 'bot' ? '🤖 Bot Chat' : t.status }}
             </span>
+            <span v-if="!isFormSubmitted" class="chip" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a" title="Passenger has not submitted the contact form">
+              ⚠️ Form Not Filled
+            </span>
+            <span v-else class="chip" style="background:#dcfce7;color:#166534;border:1px solid #bbf7d0">
+              ✓ Form Data Submitted
+            </span>
           </div>
           <p class="sub" style="margin:0">
             <strong>{{ t.visitor_name || 'Anonymous Passenger' }}</strong>
@@ -132,9 +198,15 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
           </button>
         </template>
 
-        <button class="btn alt sm" style="margin-left:auto" @click="copyTicket">
-          Copy transcript
-        </button>
+        <div class="row" style="gap:.5rem;margin-left:auto">
+          <button class="btn alt sm" @click="copyTicket">
+            Copy transcript
+          </button>
+          <button class="btn danger sm" @click="confirmDeleteModal = true" title="Delete conversation">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <span>Delete chat</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -184,6 +256,20 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
         </div>
       </div>
 
+      <!-- Warning if passenger has not submitted contact form -->
+      <div
+        v-if="!isFormSubmitted && !note"
+        style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.85rem 1rem;margin-bottom:.75rem;display:flex;gap:.75rem;align-items:flex-start;max-width:100%;box-sizing:border-box"
+      >
+        <span style="font-size:1.35rem;line-height:1;flex-shrink:0">⚠️</span>
+        <div style="flex:1 1 0%;min-width:0;word-break:break-word;overflow-wrap:anywhere">
+          <strong style="color:#92400e;font-size:.88rem;display:block;margin-bottom:.25rem">Passenger has not filled the contact form</strong>
+          <p style="margin:0;font-size:.82rem;color:#78350f;line-height:1.45;word-break:break-word;overflow-wrap:anywhere">
+            No verified name, email, or phone is on file. The passenger will only receive this reply if their live chat window is currently active. If they have closed their browser, they will not receive an email or callback notification.
+          </p>
+        </div>
+      </div>
+
       <textarea
         v-model="body"
         :placeholder="note ? 'Write an internal note for staff…' : (mine || lead ? 'Type your reply to the passenger…' : 'Claim this ticket to reply')"
@@ -198,5 +284,93 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
         <small class="sub" style="margin:0">Press <strong>Ctrl + Enter</strong> to send</small>
       </div>
     </div>
+
+    <!-- Delete Ticket Modal -->
+    <div v-if="confirmDeleteModal" class="delete-modal-backdrop" @click="confirmDeleteModal = false">
+      <div class="delete-modal card" @click.stop>
+        <div class="row" style="gap:.75rem;align-items:center;margin-bottom:1rem">
+          <div class="del-modal-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </div>
+          <div>
+            <h2 style="margin:0;font-size:1.15rem">Delete Ticket UAA-{{ t.ticket_no }}?</h2>
+            <p class="sub" style="margin:0;font-size:.82rem">Passenger: {{ t.visitor_name || 'Anonymous' }}</p>
+          </div>
+        </div>
+        <p style="font-size:.9rem;line-height:1.5;margin-bottom:1.5rem;color:var(--ink)">
+          This will permanently delete this conversation and all {{ msgs.length }} recorded messages. This action cannot be reversed.
+        </p>
+        <div class="row" style="justify-content:flex-end;gap:.6rem">
+          <button class="btn alt" :disabled="isDeleting" @click="confirmDeleteModal = false">
+            Cancel
+          </button>
+          <button class="btn danger" :disabled="isDeleting" @click="deleteChat">
+            {{ isDeleting ? 'Deleting…' : 'Yes, Delete Ticket' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Unfilled Form Warning Confirmation Modal -->
+    <div v-if="showUnfilledWarningModal" class="delete-modal-backdrop" @click="showUnfilledWarningModal = false">
+      <div class="delete-modal card" @click.stop style="max-width:480px;box-sizing:border-box">
+        <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:1rem">
+          <div class="del-modal-icon" style="background:#fef3c7;color:#d97706;flex-shrink:0">
+            <span style="font-size:1.3rem">⚠️</span>
+          </div>
+          <div style="flex:1 1 0%;min-width:0">
+            <h2 style="margin:0;font-size:1.15rem;color:#92400e;word-break:break-word">Passenger Data Not Filled</h2>
+            <p class="sub" style="margin:0;font-size:.82rem;word-break:break-word">Ticket UAA-{{ t.ticket_no }} · {{ t.visitor_name || 'Anonymous' }}</p>
+          </div>
+        </div>
+        <p style="font-size:.9rem;line-height:1.5;margin-bottom:1.25rem;color:var(--ink);word-break:break-word;overflow-wrap:anywhere">
+          This visitor has <strong>not submitted their contact information</strong> (name, email, or phone number).
+        </p>
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.75rem 1rem;margin-bottom:1.5rem">
+          <p style="margin:0;font-size:.84rem;color:#92400e;line-height:1.45;word-break:break-word;overflow-wrap:anywhere">
+            ⚠️ <strong>Notice:</strong> Your reply will be sent to the visitor's live chat session. However, if the passenger has closed their browser tab, they will <strong>not receive an email or SMS notification</strong>.
+          </p>
+        </div>
+        <div class="row" style="justify-content:flex-end;gap:.6rem;flex-wrap:wrap">
+          <button class="btn alt" @click="showUnfilledWarningModal = false">
+            Cancel
+          </button>
+          <button class="btn amber" @click="confirmSendUnfilled">
+            Send Reply to Active Session
+          </button>
+        </div>
+      </div>
+    </div>
   </template>
 </template>
+
+<style scoped>
+.delete-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 13, 22, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 250;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.delete-modal {
+  width: 100%;
+  max-width: 440px;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  padding: 20px;
+}
+.del-modal-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #fee2e2;
+  color: #ef4444;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+</style>

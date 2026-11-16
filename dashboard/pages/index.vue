@@ -1,14 +1,50 @@
 <script setup lang="ts">
 definePageMeta({ perm: 'dashboard.view' })
-const sb = useSb()
+const sb = useSb(), auth = useAuth(), { show } = useToast()
 const days = ref(30), site = ref<string>(''), sites = ref<any[]>([]), s = ref<any>(null), error = ref('')
-async function load() {
+const liveChats = ref<any[]>([])
+
+async function loadStats() {
   const { data, error: e } = await sb.rpc('dashboard_stats', { p_days: days.value, p_site: site.value || null })
   if (e) error.value = e.message; else { error.value = ''; s.value = data }
 }
-onMounted(async () => { sites.value = (await sb.from('sites').select('id,name').order('name')).data || []; load() })
+
+async function loadLiveChats() {
+  let q = sb.from('tickets').select('*, sites(name)').in('status', ['bot', 'open']).order('updated_at', { ascending: false }).limit(10)
+  if (site.value) q = q.eq('site_id', site.value)
+  const { data } = await q
+  liveChats.value = data || []
+}
+
+async function load() {
+  await Promise.all([loadStats(), loadLiveChats()])
+}
+
+let ticketChannel: any
+onMounted(async () => {
+  sites.value = (await sb.from('sites').select('id,name').order('name')).data || []
+  await load()
+  ticketChannel = sb.channel('dashboard-live-tickets')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, loadLiveChats)
+    .subscribe()
+})
+
+onBeforeUnmount(() => {
+  if (ticketChannel) sb.removeChannel(ticketChannel)
+})
+
 watch([days, site], load)
 const max = (a: any[], k: string) => Math.max(1, ...(a || []).map(x => x[k]))
+
+async function takeOverChat(ticketId: string) {
+  const { error: err } = await sb.rpc('claim_ticket', { p_ticket: ticketId })
+  if (err) {
+    show(err.message, 'err')
+  } else {
+    show('Conversation claimed! Automated bot replies paused.', 'ok')
+    navigateTo('/tickets/' + ticketId)
+  }
+}
 </script>
 <template>
   <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:1.5rem">
@@ -52,6 +88,72 @@ const max = (a: any[], k: string) => Math.max(1, ...(a || []).map(x => x[k]))
         <small>Avg First Reply</small>
         <b>{{ s.avg_first_response_min != null ? `${s.avg_first_response_min}m` : '—' }}</b>
         <span class="sub" style="font-size:.78rem">Response time</span>
+      </div>
+    </div>
+
+    <!-- Live Ongoing Chats & Quick Replies Section -->
+    <div class="card" style="margin-bottom:1.5rem">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <div class="row" style="gap:.5rem">
+          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,0.25)" />
+          <h2 style="margin:0;font-size:1.1rem">Ongoing Live Chats & Quick Replies</h2>
+          <span class="chip" style="font-size:.75rem">{{ liveChats.length }} active</span>
+        </div>
+        <NuxtLink to="/tickets" class="btn sm alt">View All Tickets →</NuxtLink>
+      </div>
+      <p class="sub" style="margin-bottom:1rem">Passengers currently interacting with quick replies or asking questions at assistance desks.</p>
+
+      <div v-if="!liveChats.length" class="empty" style="padding:1.5rem 0">
+        No active chats at the moment. All passenger inquiries have been resolved or claimed.
+      </div>
+
+      <div v-else class="scroll" style="overflow-x:auto">
+        <table style="width:100%;margin:0">
+          <thead>
+            <tr>
+              <th>Ticket</th>
+              <th>Airport Site</th>
+              <th>Passenger</th>
+              <th>Inquiry / Quick Reply</th>
+              <th>Mode</th>
+              <th>Active</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in liveChats" :key="t.id" class="click" @click="navigateTo('/tickets/' + t.id)">
+              <td>
+                <span v-if="t.unread_by_staff" class="dot" title="Unread visitor message" />
+                <strong>UAA-{{ t.ticket_no }}</strong>
+              </td>
+              <td><span class="sub" style="font-size:.85rem">{{ t.sites?.name || '—' }}</span></td>
+              <td>
+                <strong>{{ t.visitor_name || 'Passenger' }}</strong>
+                <small v-if="t.visitor_phone" style="display:block;font-size:.76rem;color:var(--teal)">📞 {{ t.visitor_phone }}</small>
+              </td>
+              <td style="max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                {{ t.subject }}
+              </td>
+              <td>
+                <span class="chip" :class="t.status === 'bot' ? 'bot' : 'open'">
+                  {{ t.status === 'bot' ? '🤖 Quick Reply / Bot' : 'Passenger Waiting' }}
+                </span>
+              </td>
+              <td><span class="sub" style="font-size:.82rem">{{ ago(t.updated_at) }}</span></td>
+              <td>
+                <button
+                  v-if="auth.can('tickets.claim')"
+                  class="btn sm amber"
+                  style="padding:3px 9px;font-size:.75rem;white-space:nowrap"
+                  @click.stop="takeOverChat(t.id)"
+                  title="Claim chat and stop automated bot responses"
+                >
+                  ⚡ Take Over
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 

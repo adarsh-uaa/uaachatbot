@@ -1,0 +1,504 @@
+// Composable for persistent Escalation Alarm and Site-specific controls
+// Keeps running until an escalated ticket is responded to / claimed by staff.
+// Supports continuous ringing, customizable intervals, Tawk.to phone ring tone, and schema-cache fallback.
+
+export interface AlarmSite {
+  id: string
+  name: string
+  escalation_alarm_enabled: boolean
+}
+
+export type AlarmSoundType = 'tawk' | 'siren' | 'radar' | 'chime' | 'beep'
+
+const globalEnabled = ref(true)
+const soundType = ref<AlarmSoundType>('tawk')
+const intervalSec = ref(0) // 0 = continuous non-stop ringing
+const volume = ref(0.95)
+const snoozedUntil = ref(0)
+const unrespondedTickets = ref<any[]>([])
+const sitesList = ref<AlarmSite[]>([])
+const isSettingsOpen = ref(false)
+
+let audioCtx: AudioContext | null = null
+let alarmTimer: any = null
+let sbChannel: any = null
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+    if (AudioContextClass) audioCtx = new AudioContextClass()
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {})
+  }
+  return audioCtx
+}
+
+// Synthesize loud, clear alert tones with Web Audio API
+async function playTone(type: AlarmSoundType, vol: number) {
+  try {
+    const ctx = getAudioContext()
+    if (!ctx) return
+    if (ctx.state === 'suspended') {
+      await ctx.resume().catch(() => {})
+    }
+
+    const now = ctx.currentTime
+    const gainNode = ctx.createGain()
+    const masterVol = Math.max(0.1, Math.min(1.0, vol))
+    gainNode.gain.setValueAtTime(masterVol, now)
+    gainNode.connect(ctx.destination)
+
+    if (type === 'tawk') {
+      // 🔔 Tawk.to Style Incoming Chat Telephone Ring
+      // Dual-burst rapid 24Hz warble ring (alternating ~920Hz and ~1180Hz)
+      const bursts = [
+        { start: now, duration: 0.28 },
+        { start: now + 0.35, duration: 0.36 }
+      ]
+
+      bursts.forEach(({ start, duration }) => {
+        const osc = ctx.createOscillator()
+        const lfo = ctx.createOscillator()
+        const lfoGain = ctx.createGain()
+        const burstGain = ctx.createGain()
+
+        osc.type = 'sawtooth'
+        osc.frequency.setValueAtTime(1050, start)
+
+        // 24Hz square wave frequency modulation (phone warble)
+        lfo.type = 'square'
+        lfo.frequency.setValueAtTime(24, start)
+        lfoGain.gain.setValueAtTime(130, start)
+
+        lfo.connect(lfoGain)
+        lfoGain.connect(osc.frequency)
+
+        // Full punchy envelope
+        burstGain.gain.setValueAtTime(masterVol * 0.95, start)
+        burstGain.gain.setValueAtTime(masterVol * 0.95, start + duration - 0.03)
+        burstGain.gain.linearRampToValueAtTime(0.001, start + duration)
+
+        osc.connect(burstGain)
+        burstGain.connect(gainNode)
+
+        lfo.start(start)
+        osc.start(start)
+        lfo.stop(start + duration)
+        osc.stop(start + duration)
+      })
+    } else if (type === 'siren') {
+      // 🚨 High-energy alternating two-tone siren
+      const osc = ctx.createOscillator()
+      osc.type = 'sawtooth'
+      osc.frequency.setValueAtTime(960, now)
+      osc.frequency.setValueAtTime(720, now + 0.16)
+      osc.frequency.setValueAtTime(960, now + 0.32)
+      osc.frequency.setValueAtTime(720, now + 0.48)
+      osc.connect(gainNode)
+
+      gainNode.gain.setValueAtTime(masterVol * 0.9, now)
+      gainNode.gain.linearRampToValueAtTime(0.001, now + 0.65)
+
+      osc.start(now)
+      osc.stop(now + 0.66)
+    } else if (type === 'radar') {
+      // 📡 Rapid ascending radar pulse (punchy sonar sweep)
+      const osc = ctx.createOscillator()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(650, now)
+      osc.frequency.exponentialRampToValueAtTime(1850, now + 0.32)
+      osc.connect(gainNode)
+
+      gainNode.gain.setValueAtTime(masterVol * 0.95, now)
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.38)
+
+      osc.start(now)
+      osc.stop(now + 0.4)
+    } else if (type === 'chime') {
+      // 🔔 Loud Airport Boarding / Arrival Chime (3-tone chord: C5 -> E5 -> G5)
+      const freqs = [523.25, 659.25, 783.99]
+      freqs.forEach((freq, idx) => {
+        const osc = ctx.createOscillator()
+        const noteGain = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+
+        const startAt = now + idx * 0.13
+        noteGain.gain.setValueAtTime(masterVol * 0.85, startAt)
+        noteGain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.5)
+
+        osc.connect(noteGain)
+        noteGain.connect(gainNode)
+
+        osc.start(startAt)
+        osc.stop(startAt + 0.52)
+      })
+    } else {
+      // ⚡ Double Crisp Beep
+      [0, 0.12].forEach((offset) => {
+        const osc = ctx.createOscillator()
+        osc.type = 'square'
+        osc.frequency.value = 920
+
+        const startAt = now + offset
+        const noteGain = ctx.createGain()
+        noteGain.gain.setValueAtTime(masterVol * 0.85, startAt)
+        noteGain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.08)
+
+        osc.connect(noteGain)
+        noteGain.connect(gainNode)
+
+        osc.start(startAt)
+        osc.stop(startAt + 0.09)
+      })
+    }
+  } catch {}
+}
+
+export function useAlarm() {
+  const sb = useSb()
+  const { show } = useToast()
+
+  // Load preferences from localStorage on client
+  function initPreferences() {
+    if (typeof window === 'undefined') return
+    const g = localStorage.getItem('uaa:alarm_global_enabled')
+    if (g !== null) globalEnabled.value = g === 'true'
+
+    const s = localStorage.getItem('uaa:alarm_sound')
+    if (s && ['tawk', 'siren', 'radar', 'chime', 'beep'].includes(s)) {
+      soundType.value = s as AlarmSoundType
+    }
+
+    const i = localStorage.getItem('uaa:alarm_interval')
+    if (i !== null && !isNaN(Number(i))) intervalSec.value = Number(i)
+
+    const v = localStorage.getItem('uaa:alarm_volume')
+    if (v && !isNaN(Number(v))) volume.value = Number(v)
+
+    // Unlock Web Audio context on user interactions with window
+    const unlock = () => {
+      const ctx = getAudioContext()
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().catch(() => {})
+      }
+    }
+    window.addEventListener('click', unlock, { passive: true })
+    window.addEventListener('keydown', unlock, { passive: true })
+    window.addEventListener('focus', unlock, { passive: true })
+    window.addEventListener('pointerdown', unlock, { passive: true })
+    window.addEventListener('touchstart', unlock, { passive: true })
+  }
+
+  function savePreferences() {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('uaa:alarm_global_enabled', String(globalEnabled.value))
+    localStorage.setItem('uaa:alarm_sound', soundType.value)
+    localStorage.setItem('uaa:alarm_interval', String(intervalSec.value))
+    localStorage.setItem('uaa:alarm_volume', String(volume.value))
+    if (alarmTimer) {
+      clearInterval(alarmTimer)
+      alarmTimer = null
+      evaluateAlarmLoop()
+    }
+  }
+
+  // Load all sites and their individual alarm settings (with self-healing fallback)
+  async function loadSites() {
+    let data: any[] | null = null
+
+    // Attempt 1: Query with escalation_alarm_enabled column
+    try {
+      const res = await sb.from('sites').select('id, name, escalation_alarm_enabled, theme').order('name')
+      if (!res.error && res.data) data = res.data
+    } catch {}
+
+    // Attempt 2: Fallback if column not yet in PostgREST schema cache
+    if (!data) {
+      const res = await sb.from('sites').select('id, name, theme').order('name')
+      data = res.data || []
+    }
+
+    sitesList.value = (data || []).map((d: any) => {
+      // Priority: localStorage > column > theme config > default true
+      let isEnabled = true
+      if (typeof window !== 'undefined') {
+        const local = localStorage.getItem('uaa:site_alarm:' + d.id)
+        if (local !== null) isEnabled = local === 'true'
+        else if (d.escalation_alarm_enabled !== undefined) isEnabled = d.escalation_alarm_enabled !== false
+        else if (d.theme?.escalation_alarm_enabled !== undefined) isEnabled = d.theme.escalation_alarm_enabled !== false
+      }
+      return {
+        id: d.id,
+        name: d.name,
+        escalation_alarm_enabled: isEnabled
+      }
+    })
+  }
+
+  // Desktop browser notification
+  function notifyBrowser(title: string, bodyText: string) {
+    if (typeof window === 'undefined' || !('Notification' in window)) return
+    try {
+      if (Notification.permission === 'granted') {
+        new Notification(title, { body: bodyText, icon: '/favicon.ico' })
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission()
+      }
+    } catch {}
+  }
+
+  // Query tickets waiting for staff response or with unread visitor messages:
+  // - status === 'open' (escalated from bot or waiting for agent)
+  // - unread_by_staff === true (visitor sent a new message and staff hasn't read/replied)
+  async function checkUnrespondedTickets() {
+    let list: any[] = []
+    try {
+      const res = await sb
+        .from('tickets')
+        .select('id, ticket_no, visitor_name, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, escalation_alarm_enabled, theme)')
+        .neq('status', 'closed')
+        .or('status.eq.open,unread_by_staff.eq.true')
+        .order('updated_at', { ascending: false })
+
+      if (!res.error && res.data) list = res.data
+    } catch {}
+
+    // Fallback if escalation_alarm_enabled column is not in PostgREST schema cache
+    if (!list || list.length === 0) {
+      try {
+        const resFallback = await sb
+          .from('tickets')
+          .select('id, ticket_no, visitor_name, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, theme)')
+          .neq('status', 'closed')
+          .or('status.eq.open,unread_by_staff.eq.true')
+          .order('updated_at', { ascending: false })
+
+        if (!resFallback.error && resFallback.data) list = resFallback.data
+      } catch {}
+    }
+
+    unrespondedTickets.value = list
+    evaluateAlarmLoop()
+  }
+
+  // Filter tickets whose individual site allows alarms
+  const activeAlarmTickets = computed(() => {
+    if (!globalEnabled.value) return []
+    return unrespondedTickets.value.filter((t: any) => {
+      const siteConfig = sitesList.value.find(s => s.id === t.site_id)
+      if (siteConfig && siteConfig.escalation_alarm_enabled !== undefined) {
+        return siteConfig.escalation_alarm_enabled !== false
+      }
+      if (typeof window !== 'undefined') {
+        const local = localStorage.getItem('uaa:site_alarm:' + t.site_id)
+        if (local !== null) return local === 'true'
+      }
+      if (t.sites?.escalation_alarm_enabled !== undefined) return t.sites.escalation_alarm_enabled !== false
+      if (t.sites?.theme?.escalation_alarm_enabled !== undefined) return t.sites.theme.escalation_alarm_enabled !== false
+      return true
+    })
+  })
+
+  const isSnoozed = computed(() => Date.now() < snoozedUntil.value)
+  const isAlarming = computed(() => activeAlarmTickets.value.length > 0 && !isSnoozed.value)
+
+  function evaluateAlarmLoop() {
+    if (isAlarming.value) {
+      if (!alarmTimer) {
+        // Play sound immediately
+        playTone(soundType.value, volume.value)
+        // Interval: 0 = continuous non-stop ringing (~800ms repeat)
+        const delayMs = intervalSec.value === 0 ? 800 : Math.max(1, intervalSec.value) * 1000
+        alarmTimer = setInterval(() => {
+          if (isAlarming.value) {
+            playTone(soundType.value, volume.value)
+          } else {
+            stopAlarm()
+          }
+        }, delayMs)
+      }
+    } else {
+      stopAlarm()
+    }
+  }
+
+  function stopAlarm() {
+    if (alarmTimer) {
+      clearInterval(alarmTimer)
+      alarmTimer = null
+    }
+  }
+
+  function snooze(minutes: number = 5) {
+    snoozedUntil.value = Date.now() + minutes * 60 * 1000
+    stopAlarm()
+    show(`Alarm snoozed for ${minutes} minutes`, 'info')
+  }
+
+  function unsnooze() {
+    snoozedUntil.value = 0
+    evaluateAlarmLoop()
+    show('Alarm resumed', 'ok')
+  }
+
+  function testSound(type?: AlarmSoundType) {
+    const t = type || soundType.value
+    playTone(t, volume.value)
+  }
+
+  // Global toggle (all sites together)
+  function toggleGlobal(val?: boolean) {
+    globalEnabled.value = val !== undefined ? val : !globalEnabled.value
+    savePreferences()
+    if (!globalEnabled.value) stopAlarm()
+    else evaluateAlarmLoop()
+    show(`Escalation alarm ${globalEnabled.value ? 'enabled' : 'disabled'} for all sites`, 'info')
+  }
+
+  // Individual Site control (Self-healing fallback if column not yet in schema cache)
+  async function toggleSite(siteId: string, enabled: boolean) {
+    // 1. Optimistic local update & localStorage persistence
+    const s = sitesList.value.find(x => x.id === siteId)
+    if (s) s.escalation_alarm_enabled = enabled
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('uaa:site_alarm:' + siteId, String(enabled))
+    }
+
+    // 2. Persist to Supabase
+    try {
+      const { error } = await sb.from('sites').update({ escalation_alarm_enabled: enabled }).eq('id', siteId)
+      if (error) {
+        const msg = String(error.message || '')
+        if (msg.includes('column') || msg.includes('schema cache')) {
+          // Fallback: save inside theme config so it still persists in DB without failing!
+          const { data: cur } = await sb.from('sites').select('theme').eq('id', siteId).single()
+          await sb.from('sites').update({ theme: { ...(cur?.theme || {}), escalation_alarm_enabled: enabled } }).eq('id', siteId)
+          show(`Alarm ${enabled ? 'enabled' : 'disabled'} for ${s?.name || 'site'} (saved to config)`, 'ok')
+        } else {
+          show('Failed to update: ' + error.message, 'err')
+        }
+      } else {
+        show(`Alarm ${enabled ? 'enabled' : 'disabled'} for ${s?.name || 'site'}`, 'ok')
+      }
+    } catch {
+      show(`Alarm ${enabled ? 'enabled' : 'disabled'} for ${s?.name || 'site'}`, 'ok')
+    }
+
+    evaluateAlarmLoop()
+  }
+
+  // Bulk update (All sites together)
+  async function setAllSites(enabled: boolean) {
+    // 1. Update in-memory state & localStorage
+    sitesList.value.forEach(s => {
+      s.escalation_alarm_enabled = enabled
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('uaa:site_alarm:' + s.id, String(enabled))
+      }
+    })
+
+    // 2. Try updating column in Supabase
+    try {
+      const { error } = await sb.from('sites').update({ escalation_alarm_enabled: enabled }).neq('id', '00000000-0000-0000-0000-000000000000')
+      if (error) {
+        const msg = String(error.message || '')
+        if (msg.includes('column') || msg.includes('schema cache')) {
+          // Schema cache notice: kept locally and ready to persist once migration is run
+          show(`All sites ${enabled ? 'enabled' : 'muted'}! (Run migration 011 in Supabase SQL Editor to sync DB column)`, 'info')
+        } else {
+          show('Failed to update all sites: ' + error.message, 'err')
+        }
+      } else {
+        show(`Escalation alarm ${enabled ? 'enabled' : 'disabled'} on all ${sitesList.value.length} sites`, 'ok')
+      }
+    } catch {
+      show(`All sites ${enabled ? 'enabled' : 'muted'}!`, 'ok')
+    }
+
+    evaluateAlarmLoop()
+  }
+
+  // One-click claim and respond (immediately silences the alarm for this ticket)
+  async function claimAndRespond(ticketId: string) {
+    const { error } = await sb.rpc('claim_ticket', { p_ticket: ticketId })
+    if (error) {
+      show(error.message, 'err')
+    } else {
+      show('Ticket claimed! Escalation alarm cleared.', 'ok')
+      await checkUnrespondedTickets()
+      navigateTo('/tickets/' + ticketId)
+    }
+  }
+
+  function start() {
+    initPreferences()
+    loadSites()
+    checkUnrespondedTickets()
+
+    if (!sbChannel) {
+      sbChannel = sb.channel('escalation-alarm-monitor')
+        // 1. Immediately sound alarm whenever visitor sends any message!
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticket_messages' }, async (payload: any) => {
+          const msg = payload?.new
+          if (msg && msg.sender === 'visitor') {
+            // Visitor messaged: ring alarm immediately!
+            playTone(soundType.value, volume.value)
+            await checkUnrespondedTickets()
+            notifyBrowser('UAA Airport Support', `New message: ${msg.body?.slice(0, 75) || 'Passenger replied'}`)
+            show(`💬 Passenger messaged: "${msg.body?.slice(0, 50)}${msg.body?.length > 50 ? '…' : ''}"`, 'info')
+          }
+        })
+        // 2. Sound alarm when ticket created or updated with unread visitor message
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, (payload: any) => {
+          const t = payload?.new
+          if (t && (t.unread_by_staff || t.status === 'open')) {
+            playTone(soundType.value, volume.value)
+          }
+          checkUnrespondedTickets()
+        })
+        // 3. Site settings changes
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'sites' }, () => {
+          loadSites()
+        })
+        .subscribe()
+    }
+  }
+
+  function destroy() {
+    stopAlarm()
+    if (sbChannel) {
+      sb.removeChannel(sbChannel)
+      sbChannel = null
+    }
+  }
+
+  return {
+    globalEnabled,
+    soundType,
+    intervalSec,
+    volume,
+    snoozedUntil,
+    isSnoozed,
+    isAlarming,
+    unrespondedTickets,
+    activeAlarmTickets,
+    sitesList,
+    isSettingsOpen,
+    start,
+    destroy,
+    checkUnrespondedTickets,
+    loadSites,
+    playTone,
+    testSound,
+    snooze,
+    unsnooze,
+    toggleGlobal,
+    toggleSite,
+    setAllSites,
+    claimAndRespond,
+    savePreferences
+  }
+}

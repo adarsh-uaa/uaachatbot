@@ -267,6 +267,7 @@ function ensureFullTheme(t: any) {
     icon: t.icon || 'chat',
     iconUrl: t.iconUrl || '',
     defaultCountryCode: t.defaultCountryCode || '+1',
+    windowSize: t.windowSize || 'normal',
     headerBg: t.headerBg || p,
     headerText: t.headerText || '#ffffff',
     headerSubtext: t.headerSubtext || 'rgba(255,255,255,0.85)',
@@ -300,7 +301,29 @@ function ensureFullTheme(t: any) {
 }
 
 async function load() {
-  sites.value = (await sb.from('sites').select('*').order('created_at')).data || []
+  const res = (await sb.from('sites').select('*').order('created_at')).data || []
+  sites.value = res.map((s: any) => {
+    let botOn = false
+    let alarmOn = s.escalation_alarm_enabled !== false
+    if (typeof window !== 'undefined') {
+      const localBot = localStorage.getItem('uaa:site_bot:' + s.id)
+      if (localBot !== null) botOn = localBot === 'true'
+      else if (s.bot_chat_enabled !== undefined) botOn = s.bot_chat_enabled === true
+      else if (s.theme?.bot_chat_enabled !== undefined) botOn = s.theme.bot_chat_enabled === true
+
+      const localAlarm = localStorage.getItem('uaa:site_alarm:' + s.id)
+      if (localAlarm !== null) alarmOn = localAlarm === 'true'
+      else if (s.escalation_alarm_enabled !== undefined) alarmOn = s.escalation_alarm_enabled !== false
+      else if (s.theme?.escalation_alarm_enabled !== undefined) alarmOn = s.theme.escalation_alarm_enabled !== false
+    } else {
+      botOn = s.bot_chat_enabled === true || s.theme?.bot_chat_enabled === true
+    }
+    return {
+      ...s,
+      bot_chat_enabled: botOn,
+      escalation_alarm_enabled: alarmOn
+    }
+  })
   if (sites.value.length > 0 && !f.value) {
     open(sites.value[0])
   }
@@ -310,6 +333,8 @@ onMounted(load)
 async function open(s: any) {
   const clone = JSON.parse(JSON.stringify(s))
   clone.theme = ensureFullTheme(clone.theme || {})
+  clone.escalation_alarm_enabled = s.escalation_alarm_enabled !== false
+  clone.bot_chat_enabled = s.bot_chat_enabled === true || s.theme?.bot_chat_enabled === true
   f.value = { ...clone, origins: (s.allowed_origins || []).join(', ') }
   const r = await sb.from('site_secrets').select('*').eq('site_id', s.id).maybeSingle()
   secrets.value = { webhook_url: r.data?.webhook_url || '', dashboard_url: r.data?.dashboard_url || '' }
@@ -346,15 +371,33 @@ async function save() {
     show('Site name cannot be empty', 'err')
     return
   }
-  const row = {
+  const isAlarmOn = f.value.escalation_alarm_enabled !== false
+  const isBotOn = f.value.bot_chat_enabled === true
+  const row: any = {
     name: f.value.name,
     faq_url: f.value.faq_url || null,
-    theme: f.value.theme,
+    theme: {
+      ...f.value.theme,
+      escalation_alarm_enabled: isAlarmOn,
+      bot_chat_enabled: isBotOn
+    },
     texts: f.value.texts,
     is_active: f.value.is_active,
+    escalation_alarm_enabled: isAlarmOn,
+    bot_chat_enabled: isBotOn,
     allowed_origins: f.value.origins.split(',').map((x: string) => x.trim().replace(/\/$/, '')).filter(Boolean)
   }
-  const a = await sb.from('sites').update(row).eq('id', f.value.id)
+  let a = await sb.from('sites').update(row).eq('id', f.value.id)
+  if (a.error && (a.error.message.includes('column') || a.error.message.includes('schema cache'))) {
+    // Fallback if column not yet added to DB
+    delete row.escalation_alarm_enabled
+    delete row.bot_chat_enabled
+    a = await sb.from('sites').update(row).eq('id', f.value.id)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('uaa:site_alarm:' + f.value.id, String(isAlarmOn))
+      localStorage.setItem('uaa:site_bot:' + f.value.id, String(isBotOn))
+    }
+  }
   const b = await sb.from('site_secrets').upsert({
     site_id: f.value.id,
     webhook_url: secrets.value.webhook_url || null,
@@ -402,6 +445,8 @@ const previewStyles = computed(() => {
     '--a': th.accent,
     '--t': th.text,
     '--r': `${th.radius ?? 16}px`,
+    '--win-w': th.windowSize === 'compact' ? '315px' : th.windowSize === 'large' ? '365px' : '330px',
+    '--win-h': th.windowSize === 'compact' ? '390px' : th.windowSize === 'large' ? '460px' : '415px',
     '--hdr-bg': th.headerBg || th.primary,
     '--hdr-txt': th.headerText || '#ffffff',
     '--hdr-sub': th.headerSubtext || 'rgba(255,255,255,0.85)',
@@ -469,6 +514,9 @@ const ICONS: Record<string, string> = {
           @click="open(s)"
         >
           <span>{{ s.name }}</span>
+          <span v-if="s.bot_chat_enabled === true" title="Automated bot assistant active" style="font-size:.72rem;margin-left:.35rem">🤖</span>
+          <span v-else title="Direct Human Team (Bot disabled)" style="font-size:.72rem;margin-left:.35rem">👤</span>
+          <span v-if="s.escalation_alarm_enabled === false" title="Escalation alarm disabled for this site" style="font-size:.72rem;margin-left:.35rem">🔕</span>
           <span v-if="!s.is_active" class="chip" style="font-size:.68rem;padding:0 .4rem;margin-left:.3rem;background:#fee2e2;color:#b91c1c">OFF</span>
         </button>
       </div>
@@ -545,6 +593,52 @@ const ICONS: Record<string, string> = {
                 </select>
                 <button class="btn alt sm" :disabled="!copyFrom" @click="applyFrom">Copy</button>
               </div>
+            </div>
+          </div>
+
+          <!-- 1.4 Escalation Alarm Controls for this Site -->
+          <div class="card" style="border-left: 3px solid var(--accent)">
+            <div class="row" style="justify-content:space-between;align-items:center;gap:1rem">
+              <div>
+                <h2 style="margin:0;font-size:1.05rem">🚨 Escalation Alarm for this Site</h2>
+                <p class="sub" style="margin:.25rem 0 0 0;font-size:.84rem">
+                  Sound continuous audio & visual alarm when passengers escalate from bot to human team on this site, until an agent claims or responds.
+                </p>
+              </div>
+              <label style="margin:0;font-weight:600;display:inline-flex;align-items:center;gap:.6rem;cursor:pointer;flex-shrink:0">
+                <input type="checkbox" v-model="f.escalation_alarm_enabled" style="width:18px;height:18px;cursor:pointer">
+                <span :style="{ color: f.escalation_alarm_enabled !== false ? 'var(--green)' : 'var(--muted)' }">
+                  {{ f.escalation_alarm_enabled !== false ? 'Alarm Enabled' : 'Alarm Silenced' }}
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 1.4b Automated Bot Assistant Settings for this Site -->
+          <div class="card" :style="{ borderLeft: f.bot_chat_enabled ? '3px solid var(--green)' : '3px solid var(--amber)' }">
+            <div class="row" style="justify-content:space-between;align-items:center;gap:1rem">
+              <div>
+                <div class="row" style="gap:.5rem;align-items:center">
+                  <h2 style="margin:0;font-size:1.05rem">🤖 Automated Bot Assistant</h2>
+                  <span class="chip" :style="{ background: f.bot_chat_enabled ? '#dcfce7' : '#fef3c7', color: f.bot_chat_enabled ? '#166534' : '#92400e', fontSize: '.75rem', padding: '2px 8px' }">
+                    {{ f.bot_chat_enabled ? 'Bot Active' : 'Bot Disabled (Direct Human Team)' }}
+                  </span>
+                </div>
+                <p class="sub" style="margin:.25rem 0 0 0;font-size:.84rem">
+                  When disabled, clicking any suggestion pill or asking a question immediately displays the contact form so passengers can reach your live support team directly.
+                </p>
+                <div style="margin-top:.45rem">
+                  <NuxtLink to="/rules" style="font-size:.82rem;display:inline-flex;align-items:center;gap:4px">
+                    Manage suggestion pills & keyword rules in Rules →
+                  </NuxtLink>
+                </div>
+              </div>
+              <label style="margin:0;font-weight:600;display:inline-flex;align-items:center;gap:.6rem;cursor:pointer;flex-shrink:0">
+                <input type="checkbox" v-model="f.bot_chat_enabled" style="width:18px;height:18px;cursor:pointer">
+                <span :style="{ color: f.bot_chat_enabled ? 'var(--green)' : 'var(--muted)' }">
+                  {{ f.bot_chat_enabled ? 'Bot Enabled' : 'Bot Disabled' }}
+                </span>
+              </label>
             </div>
           </div>
 
@@ -876,6 +970,14 @@ const ICONS: Record<string, string> = {
                   <select v-model="f.theme.position">
                     <option value="right">Bottom right</option>
                     <option value="left">Bottom left</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Chat Window Size</label>
+                  <select v-model="f.theme.windowSize">
+                    <option value="compact">Compact (315px × 440px) - Minimal</option>
+                    <option value="normal">Standard (330px × 475px) - Sleek</option>
+                    <option value="large">Large (365px × 530px) - Spacious</option>
                   </select>
                 </div>
                 <div>
@@ -1308,21 +1410,23 @@ const ICONS: Record<string, string> = {
 .sim-win {
   background: var(--win-bg);
   border-radius: var(--r);
-  box-shadow: 0 20px 40px -15px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.06);
+  box-shadow: 0 16px 36px -15px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.06);
   border: 1px solid rgba(0,0,0,0.06);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  height: 460px;
+  height: var(--win-h, 415px);
+  max-width: var(--win-w, 330px);
+  margin: 0 auto;
 }
 .sim-header {
   background: var(--hdr-bg);
   color: var(--hdr-txt);
-  padding: 12px 14px;
+  padding: 10px 12px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  border-bottom: 3px solid var(--hdr-bdr);
+  border-bottom: 2px solid var(--hdr-bdr);
 }
 .sim-title-row {
   display: flex;

@@ -2,6 +2,15 @@ export default defineNuxtConfig({
   ssr: false, // pure SPA: deploy the static output anywhere (Netlify, Cloudflare Pages, Vercel)
   compatibilityDate: '2024-09-01',
   css: ['~/assets/css/main.css'],
+  routeRules: {
+    '/uaa-widget.js': {
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    }
+  },
   nitro: {
     prerender: {
       crawlLinks: false,

@@ -1,7 +1,13 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 
-const props = defineProps({ siteKey: String, apiUrl: String, apiKey: String })
+const props = defineProps({
+  siteKey: String,
+  apiUrl: String,
+  apiKey: String,
+  botEnabled: [Boolean, String],
+  bot: [Boolean, String]
+})
 
 const open = ref(false), cfg = ref(null), failed = ref(false)
 const mode = ref('bot')              // bot | form | chat
@@ -62,6 +68,8 @@ const th = computed(() => {
     position: base.position || 'right',
     icon: base.icon || 'chat',
     iconUrl: base.iconUrl || '',
+    windowWidth: base.windowWidth || (base.windowSize === 'compact' ? '315px' : base.windowSize === 'large' ? '365px' : '330px'),
+    windowHeight: base.windowHeight || (base.windowSize === 'compact' ? '440px' : base.windowSize === 'large' ? '530px' : '475px'),
     headerBg: base.headerBg || p,
     headerText: base.headerText || '#ffffff',
     headerSubtext: base.headerSubtext || 'rgba(255,255,255,0.85)',
@@ -99,6 +107,8 @@ const style = computed(() => [
   `--a:${th.value.accent}`,
   `--t:${th.value.text}`,
   `--r:${th.value.radius}px`,
+  `--win-w:${th.value.windowWidth}`,
+  `--win-h:${th.value.windowHeight}`,
   `--hdr-bg:${th.value.headerBg}`,
   `--hdr-txt:${th.value.headerText}`,
   `--hdr-sub:${th.value.headerSubtext}`,
@@ -130,63 +140,35 @@ const style = computed(() => [
   `--lnk-txt:${th.value.linkText}`
 ].join(';'))
 
-const buttons = computed(() => {
-  const list = (cfg.value?.rules?.length) ? cfg.value.rules : DEFAULT_RULES
-  return list.filter(r => r.button_label && r.button_label !== 'Hello')
+const botChatEnabled = computed(() => {
+  // 1. Host app explicit prop override (e.g. <uaa-chat bot-enabled="true/false"> or bot="true/false")
+  if (props.botEnabled !== undefined && props.botEnabled !== null && props.botEnabled !== '') {
+    return props.botEnabled === true || props.botEnabled === 'true' || props.botEnabled === '1'
+  }
+  if (props.bot !== undefined && props.bot !== null && props.bot !== '') {
+    return props.bot === true || props.bot === 'true' || props.bot === '1'
+  }
+  // 2. Global window configuration if app defined window.UAA_BOT_ENABLED or window.uaaBotEnabled
+  if (typeof window !== 'undefined') {
+    if (window.UAA_BOT_ENABLED !== undefined) return Boolean(window.UAA_BOT_ENABLED)
+    if (window.uaaBotEnabled !== undefined) return Boolean(window.uaaBotEnabled)
+  }
+  // 3. Database site settings from widget_config RPC
+  if (cfg.value?.bot_chat_enabled !== undefined && cfg.value?.bot_chat_enabled !== null) {
+    return cfg.value.bot_chat_enabled === true
+  }
+  if (cfg.value?.theme?.bot_chat_enabled !== undefined && cfg.value?.theme?.bot_chat_enabled !== null) {
+    return cfg.value.theme.bot_chat_enabled === true
+  }
+  return false
 })
 
-const DEFAULT_RULES = [
-  {
-    name: 'Greetings & Welcome',
-    keywords: ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'start', 'greetings', 'help', 'howdy'],
-    match_type: 'contains',
-    action: 'reply',
-    response: 'Hello! Welcome to our airport assistance desk. How can we help you today? You can ask about wheelchair assistance, baggage, flight details, or connect directly with our team.',
-    button_label: 'Hello'
-  },
-  {
-    name: 'Wheelchair & Mobility (PRM)',
-    keywords: ['wheelchair', 'mobility', 'prm', 'disabled', 'disability', 'handicap', 'walking', 'elderly', 'senior', 'stretcher', 'ramp', 'special assistance', 'escort', 'buggy', 'electric cart', 'accessible'],
-    match_type: 'contains',
-    action: 'reply',
-    response: 'We provide dedicated assistance for passengers with reduced mobility (PRM) free of charge. Our team can meet you at terminal entry, assist through check-in, security, and boarding. Please book at least 48 hours in advance for priority scheduling.',
-    button_label: 'Wheelchair assistance'
-  },
-  {
-    name: 'Baggage & Lost Items',
-    keywords: ['baggage', 'luggage', 'bags', 'bag', 'suitcase', 'lost bag', 'lost luggage', 'delayed baggage', 'damaged bag', 'carousel', 'lost property', 'lost and found', 'lost item', 'lost my', 'left behind', 'left luggage'],
-    match_type: 'contains',
-    action: 'reply',
-    response: 'For baggage retrieval, delayed luggage, or items left inside the terminal, our Lost Property & Baggage desk is located in the Arrivals Hall near Carousel 3. Would you like to connect with our team to report a lost item?',
-    button_label: 'Lost baggage & items'
-  },
-  {
-    name: 'Flight & Gate Info',
-    keywords: ['flight', 'gate', 'terminal', 'boarding', 'check in', 'checkin', 'check-in', 'delay', 'departure', 'arrival', 'boarding pass', 'counter', 'security', 'fast track', 'customs', 'passport'],
-    match_type: 'contains',
-    action: 'reply',
-    response: 'Check-in desks open 3 hours prior to international flights and 2 hours for domestic flights. Live gate assignments and flight schedules are displayed on terminal screens throughout the airport.',
-    button_label: 'Flight & Gate info'
-  },
-  {
-    name: 'Terminal Amenities & Wi-Fi',
-    keywords: ['wifi', 'wi-fi', 'internet', 'restroom', 'restrooms', 'toilet', 'toilets', 'bathroom', 'washroom', 'food', 'restaurant', 'cafe', 'coffee', 'lounge', 'lounges', 'atm', 'cash', 'money', 'charging', 'charger', 'parking', 'taxi', 'cab', 'bus', 'train', 'water', 'smoking', 'prayer'],
-    match_type: 'contains',
-    action: 'reply',
-    response: 'Free high-speed airport Wi-Fi is available across all terminals. Restrooms, charging stations, prayer rooms, dining, and airline lounges are located along the central concourses.',
-    button_label: 'Terminal amenities'
-  },
-  {
-    name: 'Talk to Support Team',
-    keywords: ['human', 'agent', 'person', 'staff', 'representative', 'talk to someone', 'speak to someone', 'talk to team', 'connect', 'live agent', 'operator', 'call me', 'urgent', 'real person', 'help me'],
-    match_type: 'contains',
-    action: 'handoff',
-    response: 'I would be happy to connect you with our assistance team. Please fill in your details below so an agent can assist you right away:',
-    button_label: 'Talk to our team'
-  }
-]
-
-const showEscalateOption = computed(() => mode.value === 'bot' && msgs.value.length > 1 && !msgs.value.some(m => m.handoff))
+const buttons = computed(() => {
+  // If bot is disabled, do NOT show suggestion texts/chips
+  if (!botChatEnabled.value) return []
+  const list = cfg.value?.rules || []
+  return list.filter(r => r.button_label && r.button_label.trim() !== '')
+})
 const ICONS = {
   chat: 'M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z',
   plane: 'M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z',
@@ -205,8 +187,9 @@ async function rpc(name, args) {
 const norm = s => ' ' + s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '
 function match(text) {
   const n = norm(text)
-  const rules = (cfg.value?.rules?.length) ? cfg.value.rules : DEFAULT_RULES
-  for (const r of rules) {
+  // Only match rules configured from frontend / dashboard
+  const siteRules = cfg.value?.rules || []
+  for (const r of siteRules) {
     for (const k of (r.keywords || [])) {
       const kk = norm(k)
       if (r.match_type === 'exact' ? n === kk : n.includes(kk)) return r
@@ -218,11 +201,30 @@ const scroll = () => nextTick(() => { if (box.value) box.value.scrollTop = box.v
 const push = (from, text, extra = {}) => { msgs.value.push({ from, text, ...extra }); scroll() }
 
 function answer(rule) {
-  if (rule.action === 'handoff') { push('bot', rule.response, { handoff: true }); startForm(); return }
+  if (rule.action === 'handoff') {
+    if (rule.response && !rule.response.toLowerCase().includes('could not find an answer') && !rule.response.toLowerCase().includes('find an answer')) {
+      push('bot', rule.response, { handoff: true })
+    }
+    startForm(rule.button_label || rule.name)
+    return
+  }
   const link = rule.link_url || (rule.action === 'faq_link' ? cfg.value?.faq_url : null)
   push('bot', rule.response, link ? { link, label: rule.button_label || 'Open link' } : {})
 }
+
+function handlePillClick(rule) {
+  if (!botChatEnabled.value) {
+    // Bot mode is disabled: show form directly when they click!
+    startForm(rule.button_label || rule.name)
+    return
+  }
+  // Bot mode is enabled: execute bot rule / handoff
+  ask(rule.button_label, rule)
+}
 async function ask(text, rule) {
+  if (!botChatEnabled.value) {
+    return await startLiveChat(text)
+  }
   push('me', text)
   busy.value = true
   try {
@@ -258,7 +260,7 @@ async function ask(text, rule) {
       if (clientRule) {
         if (clientRule.action === 'handoff') {
           push('bot', clientRule.response, { handoff: true })
-          startForm()
+          startForm('Passenger requested: ' + (clientRule.button_label || text))
         } else {
           const link = clientRule.link_url || (clientRule.action === 'faq_link' ? cfg.value?.faq_url : null)
           push('bot', clientRule.response, link ? { link, label: clientRule.button_label || 'Open link' } : {})
@@ -267,31 +269,123 @@ async function ask(text, rule) {
       }
     }
 
-    // Display bot reply
-    if (res?.reply) {
+    if (isFallback) {
+      // Do not display 'I could not find an answer for that. Would you like to talk to our team?'
+      // Open form directly prefilled with visitor query
+      startForm(text)
+    } else if (res?.reply) {
       const link = res.link_url || null
-      const replyMsg = isFallback
-        ? (t.value.fallback || 'I could not find an automated answer for that. Would you like to connect with our support team? Please share your details below.')
-        : res.reply
-      push('bot', replyMsg, {
+      push('bot', res.reply, {
         ...(link ? { link, label: res.button_label || 'Open link' } : {}),
         ...(res.handoff ? { handoff: true } : {})
       })
+      if (res.handoff) {
+        startForm('Visitor requested team: ' + text)
+      }
     }
   } catch {
     // Fallback to client-side rule matching if offline or before migration
     const r = rule || match(text)
     rpc('widget_log_query', { p_site_key: props.siteKey, p_query: text, p_rule: r?.id || null, p_matched: !!r }).catch(() => {})
-    if (r) answer(r)
-    else {
-      const fallbackMsg = t.value.fallback || 'I could not find an automated answer for that. Would you like to connect with our support team? Please share your details below.'
-      push('bot', fallbackMsg, { handoff: true })
+    if (r) {
+      answer(r)
+    } else {
+      // No matching answer: open form directly without fallback bubble
+      startForm(text)
     }
   } finally {
     busy.value = false
   }
 }
-function startForm() { mode.value = 'form'; if (!form.message) form.message = [...msgs.value].reverse().find(m => m.from === 'me')?.text || ''; scroll() }
+async function startForm(reason = 'Passenger requested live assistance') {
+  mode.value = 'form'
+  const chosenTopic = (typeof reason === 'string' && reason.trim()) ? reason.trim() : ''
+  if (chosenTopic && !chosenTopic.startsWith('Passenger requested') && !chosenTopic.startsWith('Visitor requested') && !chosenTopic.startsWith('Passenger clicked') && !chosenTopic.startsWith('No matching')) {
+    form.message = chosenTopic
+  } else if (!form.message) {
+    const lastUserMsg = [...msgs.value].reverse().find(m => m.from === 'me')?.text || ''
+    form.message = lastUserMsg
+  }
+  scroll()
+
+  const escalationMsg = (typeof reason === 'string' && reason.trim()) ? reason : (form.message || 'Passenger requested live assistance')
+
+  // Immediately notify Supabase so staff dashboard starts ringing the alarm right away!
+  try {
+    const res = await rpc('widget_escalate_to_team', {
+      p_site_key: props.siteKey,
+      p_token: token,
+      p_reason: escalationMsg
+    })
+    if (res?.token) {
+      token = res.token
+      localStorage.setItem(storeKey(), token)
+      startPolling()
+    }
+  } catch {
+    // If widget_escalate_to_team RPC is not yet in Supabase (e.g. before migration 013):
+    // Create an open ticket immediately using createTicketWithFallback to sound the alarm!
+    try {
+      const fallbackTicket = await createTicketWithFallback(
+        form.name || 'Passenger',
+        form.email || 'anonymous@uaa.chat',
+        null,
+        escalationMsg
+      )
+      if (fallbackTicket?.token) {
+        token = fallbackTicket.token
+        localStorage.setItem(storeKey(), token)
+        startPolling()
+      }
+    } catch {}
+  }
+}
+
+function cancelForm() {
+  mode.value = 'bot'
+  form.message = ''
+  error.value = ''
+}
+
+async function startLiveChat(text) {
+  push('me', text)
+  busy.value = true
+  try {
+    const res = await rpc('widget_escalate_to_team', {
+      p_site_key: props.siteKey,
+      p_token: token,
+      p_reason: text
+    })
+    if (res?.token) {
+      token = res.token
+      localStorage.setItem(storeKey(), token)
+      mode.value = 'chat'
+      await poll()
+      startPolling()
+    }
+  } catch {
+    try {
+      const fallbackTicket = await createTicketWithFallback(
+        'Passenger',
+        'anonymous@uaa.chat',
+        null,
+        text
+      )
+      if (fallbackTicket?.token) {
+        token = fallbackTicket.token
+        localStorage.setItem(storeKey(), token)
+        mode.value = 'chat'
+        await poll()
+        startPolling()
+      }
+    } catch (e) {
+      error.value = e?.message || 'Failed to send message'
+      input.value = text
+    }
+  } finally {
+    busy.value = false
+  }
+}
 
 async function send() {
   const text = input.value.trim(); if (!text) return
@@ -299,26 +393,34 @@ async function send() {
   if (mode.value === 'chat') {
     try { await rpc('widget_send', { p_token: token, p_body: text }); await poll() }
     catch (e) { error.value = e.message === 'closed' ? t.value.closed : e.message; input.value = text }
-  } else if (mode.value === 'bot') await ask(text)
+  } else if (!botChatEnabled.value) {
+    // Bot chat is disabled: show form directly with the visitor's query prefilled!
+    startForm(text)
+  } else if (mode.value === 'bot') {
+    await ask(text)
+  }
 }
-async function createTicketWithFallback(phone) {
+async function createTicketWithFallback(name = form.name, email = form.email, phone = null, message = form.message) {
+  const finalName = name || 'Passenger'
+  const finalEmail = email || 'anonymous@uaa.chat'
+  const finalMsg = message || 'Assistance requested'
   try {
     return await rpc('widget_create_ticket', {
       p_site_key: props.siteKey,
-      p_name: form.name,
-      p_email: form.email,
+      p_name: finalName,
+      p_email: finalEmail,
       p_phone: phone || null,
-      p_message: form.message
+      p_message: finalMsg
     })
   } catch (err) {
     const msg = String(err?.message || '')
     // Fallback if database has 4-arg function signature in PostgREST schema cache
     if (msg.includes('schema cache') || msg.includes('Could not find the function') || msg.includes('widget_create_ticket')) {
-      const combinedMsg = phone ? `${form.message}\n\n[Contact Phone: ${phone}]` : form.message
+      const combinedMsg = phone ? `${finalMsg}\n\n[Contact Phone: ${phone}]` : finalMsg
       return await rpc('widget_create_ticket', {
         p_site_key: props.siteKey,
-        p_name: form.name,
-        p_email: form.email,
+        p_name: finalName,
+        p_email: finalEmail,
         p_message: combinedMsg
       })
     }
@@ -344,10 +446,10 @@ async function submitForm() {
         p_message: form.message
       }).catch(async () => {
         // Fallback to widget_create_ticket with schema cache fallback
-        return await createTicketWithFallback(fullPhone)
+        return await createTicketWithFallback(form.name, form.email, fullPhone, form.message)
       })
     } else {
-      r = await createTicketWithFallback(fullPhone)
+      r = await createTicketWithFallback(form.name, form.email, fullPhone, form.message)
     }
     token = r.token; localStorage.setItem(storeKey(), token)
     mode.value = 'chat'; await poll(); startPolling()
@@ -368,17 +470,66 @@ async function poll() {
     lastCount = staffCount
     if (r.status === 'closed') stopPolling()
     scroll()
-  } catch { token = null; localStorage.removeItem(storeKey()); stopPolling(); mode.value = 'bot' }
+  } catch {
+    token = null
+    localStorage.removeItem(storeKey())
+    stopPolling()
+    setInitialMode()
+  }
 }
-function startPolling() { stopPolling(); timer = setInterval(poll, 4000) }
-function stopPolling() { clearInterval(timer); timer = null }
-function newChat() { localStorage.removeItem(storeKey()); token = null; live.value = { messages: [], status: 'open' }; mode.value = 'bot'; lastCount = 0; form.message = ''; phoneNumber.value = '' }
+function setInitialMode() {
+  mode.value = botChatEnabled.value ? 'bot' : 'form'
+}
+watch(botChatEnabled, isBotOn => {
+  if (!token) {
+    mode.value = isBotOn ? 'bot' : 'form'
+    if (isBotOn && msgs.value.length === 0 && cfg.value?.texts?.greeting) {
+      msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
+    }
+  }
+})
+function startPolling() {
+  stopPolling()
+  timer = setInterval(poll, 4000)
+}
+function stopPolling() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+function handleVisibility() {
+  if (typeof document === 'undefined') return
+  if (!token || live.value?.status === 'closed') return
+  if (document.hidden) {
+    stopPolling()
+    timer = setInterval(poll, 15000)
+  } else {
+    poll()
+    startPolling()
+  }
+}
+function newChat() {
+  localStorage.removeItem(storeKey())
+  token = null
+  live.value = { messages: [], status: 'open' }
+  setInitialMode()
+  lastCount = 0
+  form.message = ''
+  phoneNumber.value = ''
+  error.value = ''
+}
 function toggle() { open.value = !open.value; if (open.value) { unread.value = false; scroll() } }
 
 onMounted(async () => {
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibility, { passive: true })
+  }
   try {
     cfg.value = await rpc('widget_config', { p_site_key: props.siteKey })
-    msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
+    if (botChatEnabled.value && cfg.value?.texts?.greeting) {
+      msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
+    }
     if (cfg.value?.theme?.defaultCountryCode) {
       countryCode.value = cfg.value.theme.defaultCountryCode
     }
@@ -397,9 +548,37 @@ onMounted(async () => {
       localStorage.removeItem(storeKey())
     }
   }
+  if (!token) {
+    setInitialMode()
+  }
 })
-onBeforeUnmount(stopPolling)
-watch(open, v => v && scroll())
+function setBodyScrollLock(locked) {
+  if (typeof document === 'undefined') return
+  const host = box.value?.getRootNode()?.host || document.querySelector('uaa-chat')
+  if (locked) {
+    document.documentElement.classList.add('uaa-chat-open')
+    document.body.classList.add('uaa-chat-open')
+    document.body.style.overflow = 'hidden'
+    if (host) host.setAttribute('data-chat-open', 'true')
+  } else {
+    document.documentElement.classList.remove('uaa-chat-open')
+    document.body.classList.remove('uaa-chat-open')
+    document.body.style.overflow = ''
+    if (host) host.removeAttribute('data-chat-open')
+  }
+}
+
+onBeforeUnmount(() => {
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibility)
+  }
+  setBodyScrollLock(false)
+  stopPolling()
+})
+watch(open, v => {
+  setBodyScrollLock(v)
+  if (v) scroll()
+})
 </script>
 
 <template>
@@ -419,28 +598,22 @@ watch(open, v => v && scroll())
       </header>
       <div ref="box" class="body" aria-live="polite">
         <template v-if="mode !== 'chat'">
-          <div v-for="(m, i) in msgs" :key="i" class="m" :class="m.from">
-            {{ m.text }}
-            <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="lnk">{{ m.label }} →</a>
-            <button
-              v-if="m.handoff && i === msgs.length - 1"
-              class="pill solid handoff-btn"
-              @click="startForm"
-            >
-              {{ t.handoff || 'Connect with our team' }}
-            </button>
-          </div>
-          <div v-if="msgs.length < 2 && buttons.length" class="chips">
-            <button v-for="b in buttons" :key="b.id || b.button_label" class="pill" @click="ask(b.button_label, b)">
-              {{ b.button_label }}
-            </button>
-          </div>
-          <div v-if="showEscalateOption" class="escalate-row">
-            <button class="txt-btn" @click="startForm">
-              Need live assistance? Connect with our team →
-            </button>
-          </div>
+          <template v-if="botChatEnabled">
+            <div v-for="(m, i) in msgs" :key="i" class="m" :class="m.from">
+              {{ m.text }}
+              <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="lnk">{{ m.label }} →</a>
+            </div>
+            <div v-if="msgs.length < 2 && buttons.length && mode !== 'form'" class="chips">
+              <button v-for="b in buttons" :key="b.id || b.button_label" class="pill" @click="handlePillClick(b)">
+                {{ b.button_label }}
+              </button>
+            </div>
+          </template>
           <form v-if="mode === 'form'" class="form" @submit.prevent="submitForm">
+            <div class="form-intro">
+              <b>Connect with our Support Team</b>
+              <p class="sub">Please share your contact details below so our airport team can assist you.</p>
+            </div>
             <label>Your full name<input v-model="form.name" required maxlength="80" autocomplete="name" placeholder="Alex Morgan"></label>
             <label>Email address<input v-model="form.email" type="email" required maxlength="160" autocomplete="email" placeholder="alex@example.com"></label>
             <label>Phone number
@@ -465,6 +638,14 @@ watch(open, v => v && scroll())
             <p v-if="error" class="err">{{ error }}</p>
             <button class="pill solid" :disabled="busy" style="width:100%;text-align:center;margin-top:.4rem;padding:9px 16px">
               {{ busy ? 'Submitting…' : 'Send to our team' }}
+            </button>
+            <button
+              v-if="!token && buttons.length && botChatEnabled"
+              type="button"
+              class="cancel-btn"
+              @click="cancelForm"
+            >
+              ← Choose another topic
             </button>
           </form>
         </template>
@@ -576,19 +757,20 @@ watch(open, v => v && scroll())
   50% { transform: scale(1.15); }
 }
 
-/* Chat Window Frame */
+/* Chat Window Frame - Sleek, Compact Minimal Footprint */
 .win {
   position: absolute;
-  bottom: 74px;
-  width: min(380px, calc(100vw - 32px));
-  height: min(580px, calc(100vh - 110px));
+  bottom: 66px;
+  width: min(var(--win-w, 325px), calc(100vw - 20px));
+  height: min(var(--win-h, 460px), calc(100vh - 84px));
   background: var(--win-bg);
   border-radius: var(--r);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   border: 1px solid rgba(0, 0, 0, 0.05);
+  overscroll-behavior: contain;
 }
 .right .win { right: 0; }
 .left .win { left: 0; }
@@ -597,16 +779,16 @@ watch(open, v => v && scroll())
 header {
   background: var(--hdr-bg);
   color: var(--hdr-txt);
-  padding: 14px 16px;
+  padding: 10px 13px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  border-bottom: 3px solid var(--hdr-bdr);
+  border-bottom: 2px solid var(--hdr-bdr);
 }
 .hdr-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 .hdr-title-row {
   display: flex;
@@ -614,22 +796,22 @@ header {
   gap: 6px;
 }
 .online-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #22c55e;
   box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
   display: inline-block;
 }
 header b {
-  font-size: 15px;
+  font-size: 13.5px;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
 header small {
   display: block;
   color: var(--hdr-sub);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   opacity: 0.9;
 }
@@ -637,8 +819,8 @@ header small {
   background: rgba(255, 255, 255, 0.1);
   border: 0;
   color: var(--hdr-txt);
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -655,26 +837,27 @@ header small {
 .body {
   flex: 1;
   overflow-y: auto;
-  padding: 14px;
+  overscroll-behavior: contain;
+  padding: 10px 11px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
   background: var(--chat-bg);
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
 }
 .m {
-  max-width: 82%;
-  padding: 9px 13px;
+  max-width: 85%;
+  padding: 7px 11px;
   border-radius: var(--r);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--b-bg);
   color: var(--b-txt);
   border: 1px solid var(--b-bdr);
-  font-size: 13.5px;
-  line-height: 1.5;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  font-size: 12.5px;
+  line-height: 1.42;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 .m.bot {
   align-self: flex-start;
@@ -691,17 +874,17 @@ header small {
   align-self: center;
   text-align: center;
   color: var(--sys-txt);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
-  margin: 4px 0;
-  line-height: 1.4;
+  margin: 3px 0;
+  line-height: 1.35;
 }
 .lnk {
   display: inline-block;
-  margin-top: 6px;
+  margin-top: 5px;
   color: var(--lnk-txt);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 12px;
   text-decoration: none;
 }
 .lnk:hover {
@@ -712,17 +895,17 @@ header small {
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px;
 }
 .pill {
   border: 1px solid var(--pill-bdr);
   background: var(--pill-bg);
   color: var(--pill-txt);
   border-radius: 99px;
-  padding: 6px 13px;
+  padding: 4px 9px;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: 11.5px;
   font-weight: 500;
   align-self: flex-start;
   transition: all .15s cubic-bezier(0.4, 0, 0.2, 1);
@@ -743,55 +926,67 @@ header small {
 }
 .handoff-btn {
   display: block;
-  margin-top: 8px;
+  margin-top: 7px;
   width: auto;
 }
-.escalate-row {
-  display: flex;
-  justify-content: center;
-  padding: 4px 0;
+.form-intro {
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--b-bdr);
 }
-.txt-btn {
+.form-intro b {
+  font-size: 12px;
+  color: var(--t);
+  display: block;
+}
+.form-intro .sub {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--sys-txt);
+  line-height: 1.35;
+}
+.cancel-btn {
   background: none;
   border: none;
-  color: var(--sys-txt);
-  font-size: 12px;
+  color: var(--lnk-txt);
+  font-size: 11.5px;
   cursor: pointer;
-  padding: 4px 8px;
-  text-decoration: underline;
+  padding: 4px;
+  text-align: center;
+  margin-top: 2px;
   opacity: 0.85;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  transition: opacity 0.15s ease;
 }
-.txt-btn:hover {
+.cancel-btn:hover {
   opacity: 1;
-  color: var(--a);
+  text-decoration: underline;
 }
 
 /* Ticket Form Inside Widget */
 .form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   background: var(--win-bg);
   border: 1px solid var(--b-bdr);
   border-radius: var(--r);
-  padding: 12px;
+  padding: 9px 10px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
 .form label {
   display: flex;
   flex-direction: column;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  gap: 3px;
+  gap: 2px;
   color: var(--t);
 }
 .form input, .form textarea, .form select {
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   border: 1px solid var(--in-bdr);
-  border-radius: 8px;
-  padding: 7px 10px;
+  border-radius: 6px;
+  padding: 5px 8px;
   color: var(--in-txt);
   background: var(--in-bg);
   width: 100%;
@@ -805,15 +1000,16 @@ header small {
   display: flex !important;
   flex-direction: row !important;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   width: 100%;
 }
 .phone-code-select {
-  width: 105px !important;
-  min-width: 95px !important;
+  width: 98px !important;
+  min-width: 90px !important;
   flex-shrink: 0 !important;
   cursor: pointer;
-  padding: 7px 6px !important;
+  padding: 5px 4px !important;
+  font-size: 11.5px !important;
 }
 .phone-national-input {
   flex: 1 !important;
@@ -830,24 +1026,24 @@ header small {
 .err {
   color: #e11d48;
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11.5px;
   margin: 2px 0;
 }
 
 /* Modern Compose Bar */
 footer {
   border-top: 1px solid var(--b-bdr);
-  padding: 10px 14px;
+  padding: 7px 10px;
   background: var(--ftr-bg);
 }
 .send-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 1px solid var(--in-bdr);
-  border-radius: 24px;
+  border-radius: 20px;
   background: var(--in-bg);
-  padding: 3px 4px 3px 12px;
+  padding: 2px 3px 2px 10px;
   transition: border-color .15s ease, box-shadow .15s ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
@@ -861,8 +1057,8 @@ footer {
   background: transparent;
   color: var(--in-txt);
   font: inherit;
-  font-size: 13.5px;
-  padding: 6px 0;
+  font-size: 12.5px;
+  padding: 4px 0;
   min-width: 0;
 }
 .send-bar input:focus {
@@ -873,13 +1069,17 @@ footer {
   background: var(--send-bg);
   color: var(--send-txt);
   border-radius: 50%;
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   cursor: pointer;
   flex-shrink: 0;
   transition: transform .15s ease, opacity .15s ease;
+}
+.send-btn svg {
+  width: 13px;
+  height: 13px;
 }
 .send-btn:hover {
   transform: scale(1.06);
