@@ -221,7 +221,7 @@ export function useAlarm() {
 
     // Cross-tab storage event backup (fires across tabs on same origin when localStorage is written)
     window.addEventListener('storage', (e) => {
-      if (e.key === 'uaa:claimed_ticket_id' && e.newValue) {
+      if ((e.key === 'uaa:claimed_ticket_id' || e.key === 'uaa:opened_ticket_id') && e.newValue) {
         const id = e.newValue.split(':')[0]
         if (id) {
           unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== id)
@@ -229,6 +229,11 @@ export function useAlarm() {
         }
         checkUnrespondedTickets()
       }
+    })
+
+    window.addEventListener('focus', () => {
+      unlock()
+      checkUnrespondedTickets()
     })
 
     if (typeof document !== 'undefined') {
@@ -317,10 +322,10 @@ export function useAlarm() {
   // Query tickets waiting for staff response:
   // - status !== 'closed'
   // - claimed_by is null (unclaimed: nobody has responded/claimed it yet)
+  // - unread_by_staff === true (nobody has OPENED or attended the ticket yet)
   // - form_submitted === true (ONLY send alarm if passenger filled out the form)
-  // - status === 'open' or unread_by_staff === true
-  // As soon as ONE staff member claims or responds, claimed_by is set,
-  // which immediately silences the alarm and notification for ALL other users!
+  // As soon as ANY staff member opens the ticket or claims it, unread_by_staff becomes false
+  // or claimed_by is set, which immediately silences the alarm and removes the banner for ALL devices!
   async function checkUnrespondedTickets() {
     let list: any[] = []
     let queryFailed = false
@@ -330,7 +335,7 @@ export function useAlarm() {
         .select('id, ticket_no, visitor_name, visitor_email, visitor_phone, form_submitted, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, escalation_alarm_enabled, theme)')
         .neq('status', 'closed')
         .is('claimed_by', null)
-        .or('status.eq.open,unread_by_staff.eq.true')
+        .eq('unread_by_staff', true)
         .order('updated_at', { ascending: false })
 
       if (res.error) {
@@ -350,7 +355,7 @@ export function useAlarm() {
           .select('id, ticket_no, visitor_name, visitor_email, visitor_phone, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, theme)')
           .neq('status', 'closed')
           .is('claimed_by', null)
-          .or('status.eq.open,unread_by_staff.eq.true')
+          .eq('unread_by_staff', true)
           .order('updated_at', { ascending: false })
 
         if (!resFallback.error && resFallback.data) list = resFallback.data
@@ -359,12 +364,14 @@ export function useAlarm() {
 
     // STRICT BUSINESS RULE:
     // 1. Only send alarm IF visitor has filled out the contact form (form_submitted or real email/phone).
-    // 2. If ONE staff member claims or responds, claimed_by is set, IMMEDIATELY triggering off the alarm for all!
+    // 2. If ANY staff member opens the ticket (unread_by_staff = false) or claims it (claimed_by is set),
+    //    it MUST NOT show the warning/alarm on ANY other device or account!
     unrespondedTickets.value = (list || []).filter((t: any) => {
       if (t.status === 'closed') return false
       if (t.claimed_by) return false
+      if (t.unread_by_staff === false) return false
       if (!isFormFilled(t)) return false
-      return t.status === 'open' || t.unread_by_staff === true
+      return true
     })
     evaluateAlarmLoop()
   }
@@ -506,7 +513,9 @@ export function useAlarm() {
     evaluateAlarmLoop()
   }
 
-  function broadcastTicketClaimed(ticketId: string) {
+  // Broadcast that a ticket was OPENED / viewed by a staff member
+  // (Immediately silences alarm & removes warning banner on all other devices/accounts)
+  function broadcastTicketOpened(ticketId: string) {
     if (!ticketId) return
     // 1. Immediately remove from local list & silence alarm locally
     unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== ticketId)
@@ -515,16 +524,41 @@ export function useAlarm() {
     // 2. Cross-tab localStorage trigger (0ms latency, zero network required)
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem('uaa:claimed_ticket_id', `${ticketId}:${Date.now()}`)
+        localStorage.setItem('uaa:opened_ticket_id', `${ticketId}:${Date.now()}`)
       } catch {}
     }
 
     // 3. Browser BroadcastChannel (0ms latency across tabs)
     try {
-      localBc?.postMessage({ event: 'ticket_claimed', ticketId })
+      localBc?.postMessage({ event: 'ticket_opened', ticketId })
     } catch {}
 
     // 4. Supabase Realtime broadcast across all staff members on network
+    try {
+      if (sbChannel) {
+        sbChannel.send({
+          type: 'broadcast',
+          event: 'ticket_opened',
+          payload: { ticketId }
+        }).catch(() => {})
+      }
+    } catch {}
+  }
+
+  function broadcastTicketClaimed(ticketId: string) {
+    if (!ticketId) return
+    broadcastTicketOpened(ticketId)
+
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('uaa:claimed_ticket_id', `${ticketId}:${Date.now()}`)
+      } catch {}
+    }
+
+    try {
+      localBc?.postMessage({ event: 'ticket_claimed', ticketId })
+    } catch {}
+
     try {
       if (sbChannel) {
         sbChannel.send({
@@ -543,6 +577,7 @@ export function useAlarm() {
     evaluateAlarmLoop()
 
     // 2. Instantly notify all peer tabs and staff screens via Broadcast to silence their alarms too
+    broadcastTicketOpened(ticketId)
     broadcastTicketClaimed(ticketId)
 
     // 3. Perform database claim
@@ -576,11 +611,11 @@ export function useAlarm() {
       try { sb.realtime.setAuth(token) } catch {}
     }
 
-    // 2. 2.5-second backup polling loop ensures alarms ring across all staff tabs even if background WebSockets sleep
+    // 2. 2-second backup polling loop ensures alarms ring across all staff tabs even if background WebSockets sleep
     if (!pollTimer) {
       pollTimer = setInterval(() => {
         checkUnrespondedTickets()
-      }, 2500)
+      }, 2000)
     }
 
     // 3. Reset channel so it connects with the authenticated session on shared topic
@@ -591,8 +626,16 @@ export function useAlarm() {
 
     const channelTopic = SHARED_ALARM_CHANNEL
     sbChannel = sb.channel(channelTopic)
-      // Broadcast event: instantly received when any staff member claims or responds
+      // Broadcast event: instantly received when any staff member claims or OPENS a ticket
       .on('broadcast', { event: 'ticket_claimed' }, (payload: any) => {
+        const id = payload?.payload?.ticketId
+        if (id) {
+          unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== id)
+          evaluateAlarmLoop()
+        }
+        checkUnrespondedTickets()
+      })
+      .on('broadcast', { event: 'ticket_opened' }, (payload: any) => {
         const id = payload?.payload?.ticketId
         if (id) {
           unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== id)
@@ -616,11 +659,12 @@ export function useAlarm() {
         }
       })
       // 2. Sound alarm when form-submitted ticket is created/updated and unclaimed;
-      //    And immediately silence alarm for all users if someone claims or closes it!
+      //    And immediately silence alarm for all users if someone opens, claims, or closes it!
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, async (payload: any) => {
         const t = payload?.new
-        // If ticket was claimed by ANY staff member or closed: immediately re-evaluate and silence alarm for all!
-        if (t && (t.claimed_by || t.status === 'closed')) {
+        // If ticket was claimed, opened/read (unread_by_staff = false), or closed:
+        // immediately re-evaluate and silence alarm for all devices/accounts!
+        if (t && (t.claimed_by || t.status === 'closed' || t.unread_by_staff === false)) {
           if (t.id) {
             unrespondedTickets.value = unrespondedTickets.value.filter(x => x.id !== t.id)
             evaluateAlarmLoop()
@@ -628,8 +672,8 @@ export function useAlarm() {
           await checkUnrespondedTickets()
           return
         }
-        // Only sound alarm if the visitor has actually submitted the form!
-        if (t && !t.claimed_by && t.status !== 'closed' && isFormFilled(t) && (t.unread_by_staff || t.status === 'open')) {
+        // Only sound alarm if the visitor has actually submitted the form AND ticket is unread!
+        if (t && !t.claimed_by && t.status !== 'closed' && t.unread_by_staff === true && isFormFilled(t)) {
           playTone(soundType.value, volume.value)
         }
         await checkUnrespondedTickets()
@@ -686,6 +730,7 @@ export function useAlarm() {
     toggleSite,
     setAllSites,
     claimAndRespond,
+    broadcastTicketOpened,
     broadcastTicketClaimed,
     savePreferences
   }

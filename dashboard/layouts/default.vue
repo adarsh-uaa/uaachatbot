@@ -6,6 +6,13 @@ const { toast, show } = useToast()
 const route = useRoute()
 const alarm = useAlarm()
 
+// Fully reactive top-level computed variables so template re-renders automatically
+const activeAlarmTickets = computed(() => alarm.activeAlarmTickets.value)
+const isAlarming = computed(() => alarm.isAlarming.value)
+const isSnoozed = computed(() => alarm.isSnoozed.value)
+const globalAlarmEnabled = computed(() => alarm.globalEnabled.value)
+const firstAlarmTicket = computed(() => activeAlarmTickets.value[0] || null)
+
 const mobileOpen = ref(false)
 watch(() => route.fullPath, () => {
   mobileOpen.value = false
@@ -45,6 +52,9 @@ function subscribeNewTickets() {
   if (!auth.session.value) return
   channel = sb.channel('staff-notifications-sync')
     .on('broadcast', { event: 'ticket_claimed' }, () => {
+      alarm.checkUnrespondedTickets()
+    })
+    .on('broadcast', { event: 'ticket_opened' }, () => {
       alarm.checkUnrespondedTickets()
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, (p: any) => {
@@ -122,11 +132,11 @@ onBeforeUnmount(() => {
         <!-- Quick Alarm Bell on Mobile -->
         <button
           class="alarm-header-btn"
-          :class="{ active: alarm.isAlarming.value, muted: !alarm.globalEnabled.value }"
+          :class="{ active: isAlarming, muted: !globalAlarmEnabled }"
           @click="alarm.isSettingsOpen.value = true"
-          :title="alarm.isAlarming.value ? 'Escalation Alarm Ringing!' : 'Escalation Alarm Settings'"
+          :title="isAlarming ? 'Escalation Alarm Ringing!' : 'Escalation Alarm Settings'"
         >
-          {{ alarm.isAlarming.value ? '🚨' : !alarm.globalEnabled.value ? '🔕' : '🔔' }}
+          {{ isAlarming ? '🚨' : !globalAlarmEnabled ? '🔕' : '🔔' }}
         </button>
         <div v-if="auth.profile.value" class="mobile-avatar" :title="auth.profile.value.pseudo_name">
           {{ initials }}
@@ -159,17 +169,17 @@ onBeforeUnmount(() => {
       <div style="padding:0 .75rem;margin-bottom:.5rem">
         <button
           class="alarm-sidebar-card"
-          :class="{ ringing: alarm.isAlarming.value, muted: !alarm.globalEnabled.value }"
+          :class="{ ringing: isAlarming, muted: !globalAlarmEnabled }"
           @click="alarm.isSettingsOpen.value = true"
         >
           <div class="alarm-sidebar-left">
-            <span class="alarm-pulse-dot" :class="{ ringing: alarm.isAlarming.value, muted: !alarm.globalEnabled.value }" />
+            <span class="alarm-pulse-dot" :class="{ ringing: isAlarming, muted: !globalAlarmEnabled }" />
             <div style="text-align:left;line-height:1.2">
               <strong style="font-size:.76rem;display:block">
-                {{ alarm.isAlarming.value ? '🚨 ALARM RINGING' : !alarm.globalEnabled.value ? '🔕 Alarm Muted' : '🔔 Escalation Alarm' }}
+                {{ isAlarming ? '🚨 ALARM RINGING' : !globalAlarmEnabled ? '🔕 Alarm Muted' : '🔔 Escalation Alarm' }}
               </strong>
               <small style="font-size:.68rem;opacity:.8">
-                {{ alarm.isAlarming.value ? `${alarm.activeAlarmTickets.value.length} waiting` : 'Settings & controls' }}
+                {{ isAlarming ? `${activeAlarmTickets.length} waiting` : 'Settings & controls' }}
               </small>
             </div>
           </div>
@@ -208,40 +218,40 @@ onBeforeUnmount(() => {
 
     <!-- Main Content Area with Persistent Escalation Alarm Banner -->
     <main class="main">
-      <!-- 🚨 Persistent Escalation Alarm Banner (Runs continuously until ticket is claimed or responded) -->
-      <div v-if="alarm.activeAlarmTickets.value.length > 0" class="escalation-alert-banner" :class="{ snoozed: alarm.isSnoozed.value }">
+      <!-- 🚨 Persistent Escalation Alarm Banner (Runs continuously until ticket is opened, claimed, or responded) -->
+      <div v-if="activeAlarmTickets.length > 0 && firstAlarmTicket" class="escalation-alert-banner" :class="{ snoozed: isSnoozed }">
         <div class="banner-inner">
           <div class="banner-info">
-            <span class="banner-siren-icon">{{ alarm.isSnoozed.value ? '🔕' : '🚨' }}</span>
+            <span class="banner-siren-icon">{{ isSnoozed ? '🔕' : '🚨' }}</span>
             <div>
               <div class="row" style="gap:.5rem;align-items:center">
                 <strong class="banner-title">
-                  {{ alarm.activeAlarmTickets.value[0]?.unread_by_staff ? '💬 New Passenger Message' : '🚨 Escalated Ticket Waiting' }}
-                  ({{ alarm.activeAlarmTickets.value.length }} ticket{{ alarm.activeAlarmTickets.value.length > 1 ? 's' : '' }})
+                  {{ firstAlarmTicket.unread_by_staff ? '💬 New Passenger Message' : '🚨 Escalated Ticket Waiting' }}
+                  ({{ activeAlarmTickets.length }} ticket{{ activeAlarmTickets.length > 1 ? 's' : '' }})
                 </strong>
-                <span v-if="alarm.isSnoozed.value" class="chip" style="background:#fef08a;color:#854d0e;font-size:.7rem;padding:1px 6px">
+                <span v-if="isSnoozed" class="chip" style="background:#fef08a;color:#854d0e;font-size:.7rem;padding:1px 6px">
                   Audio Snoozed
                 </span>
                 <span v-else class="pulse-indicator-badge">ALARM ACTIVE</span>
               </div>
               <div class="banner-desc">
-                <strong>UAA-{{ alarm.activeAlarmTickets.value[0].ticket_no }}</strong>
-                ({{ alarm.activeAlarmTickets.value[0].sites?.name || 'Airport' }})
-                · Passenger: <em>{{ alarm.activeAlarmTickets.value[0].visitor_name || 'Anonymous' }}</em>
-                — {{ alarm.activeAlarmTickets.value[0].subject }}
+                <strong>UAA-{{ firstAlarmTicket.ticket_no }}</strong>
+                ({{ firstAlarmTicket.sites?.name || 'Airport' }})
+                · Passenger: <em>{{ firstAlarmTicket.visitor_name || 'Anonymous' }}</em>
+                — {{ firstAlarmTicket.subject }}
               </div>
             </div>
           </div>
           <div class="banner-actions">
             <button
               class="btn-alarm primary"
-              @click="alarm.claimAndRespond(alarm.activeAlarmTickets.value[0].id)"
+              @click="alarm.claimAndRespond(firstAlarmTicket.id)"
               title="Claim ticket and silence alarm immediately"
             >
               ⚡ Open & Respond
             </button>
             <button
-              v-if="!alarm.isSnoozed.value"
+              v-if="!isSnoozed"
               class="btn-alarm secondary"
               @click="alarm.snooze(5)"
               title="Silence alarm sound for 5 minutes"

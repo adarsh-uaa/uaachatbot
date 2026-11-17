@@ -18,35 +18,55 @@ values
   ('manager', 'users.view_real')
 on conflict (role, permission) do nothing;
 
--- 2. Update profiles_read RLS policy
+-- 2. Define security definer helper to check real name permissions without RLS recursion
+create or replace function can_view_real() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from profiles pr
+    where pr.id = auth.uid()
+      and (
+        pr.role in ('admin', 'manager', 'teamlead')
+        or exists (
+          select 1 from role_permissions rp
+          where rp.role = pr.role and rp.permission in ('users.view_real', 'users.manage')
+        )
+        or exists (
+          select 1 from user_permissions up
+          where up.user_id = pr.id and up.permission in ('users.view_real', 'users.manage') and up.granted = true
+        )
+      )
+  );
+$$;
+
+grant execute on function can_view_real() to authenticated;
+
+-- 3. Update profiles_read RLS policy (uses security definer helper to prevent any policy recursion)
 drop policy if exists profiles_read on profiles;
 create policy profiles_read on profiles for select to authenticated
   using (
     id = auth.uid()
-    or has_perm('users.view_real')
-    or has_perm('users.manage')
-    or (select role from profiles where id = auth.uid()) in ('admin', 'manager', 'teamlead')
+    or can_view_real()
   );
 
--- 3. Update tickets_read RLS so all active staff members receive Realtime events
+-- 4. Update tickets_read RLS so all active staff members receive Realtime events
 drop policy if exists tickets_read on tickets;
 create policy tickets_read on tickets for select to authenticated using (
   is_staff()
 );
 
--- 4. Update messages_read RLS so all active staff members receive message Realtime events
+-- 5. Update messages_read RLS so all active staff members receive message Realtime events
 drop policy if exists messages_read on ticket_messages;
 create policy messages_read on ticket_messages for select to authenticated using (
   is_staff()
 );
 
--- 5. Allow active staff to update tickets (e.g. mark read, claim, status)
+-- 6. Allow active staff to update tickets (e.g. mark read, claim, status)
 drop policy if exists tickets_update on tickets;
 create policy tickets_update on tickets for update to authenticated
   using (is_staff())
   with check (is_staff());
 
--- 6. Update claim_ticket RPC:
+-- 7. Update claim_ticket RPC:
 --    Setting unread_by_staff = false, claimed_by = auth.uid(), status = 'claimed'
 --    immediately silences the escalation alarm for ALL logged-in staff members!
 create or replace function claim_ticket(p_ticket uuid) returns void
@@ -69,7 +89,7 @@ begin
     values (p_ticket, 'system', auth.uid(), me.pseudo_name || ' joined the conversation');
 end $$;
 
--- 7. Add mark_ticket_read RPC
+-- 8. Add mark_ticket_read RPC
 create or replace function mark_ticket_read(p_ticket uuid) returns void
 language plpgsql security definer set search_path = public as $$
 begin
@@ -78,11 +98,11 @@ begin
    where id = p_ticket and unread_by_staff = true;
 end $$;
 
--- 8. Ensure tickets and ticket_messages have FULL replica identity for Realtime change payloads
+-- 9. Ensure tickets and ticket_messages have FULL replica identity for Realtime change payloads
 alter table tickets replica identity full;
 alter table ticket_messages replica identity full;
 
--- 9. Ensure both tables are in supabase_realtime publication
+-- 10. Ensure both tables are in supabase_realtime publication
 do $$
 begin
   if not exists (
@@ -99,6 +119,6 @@ begin
   end if;
 end $$;
 
--- 10. Reload PostgREST schema cache
+-- 11. Reload PostgREST schema cache
 notify pgrst, 'reload schema';
 

@@ -25,18 +25,20 @@ const isFormSubmitted = computed(() => {
 })
 
 async function load() {
+  // The moment ANY staff member opens this ticket, immediately silence alarm across all devices
+  alarm.broadcastTicketOpened(id)
+
   const a = await sb.from('tickets').select('*, sites(name)').eq('id', id).maybeSingle()
   if (!a.data) { error.value = 'Ticket not found, or you no longer have access to it.'; t.value = null; return }
   t.value = a.data
   msgs.value = (await sb.from('ticket_messages').select('*').eq('ticket_id', id).order('created_at')).data || []
   if (a.data.unread_by_staff) {
-    sb.rpc('mark_ticket_read', { p_ticket: id }).then(() => {
-      if (t.value) t.value.unread_by_staff = false
-      alarm.broadcastTicketClaimed(id)
-    }).catch(() => {
-      sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).catch(() => {})
-      alarm.broadcastTicketClaimed(id)
-    })
+    const { error: rpcErr } = await sb.rpc('mark_ticket_read', { p_ticket: id })
+    if (rpcErr) {
+      await sb.from('tickets').update({ unread_by_staff: false }).eq('id', id)
+    }
+    if (t.value) t.value.unread_by_staff = false
+    alarm.broadcastTicketOpened(id)
   }
   nextTick(() => { const el = document.getElementById('thread'); if (el) el.scrollTop = el.scrollHeight })
 }

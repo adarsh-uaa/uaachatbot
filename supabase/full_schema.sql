@@ -220,6 +220,25 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Enforce permission check or throw 42501 error
+create or replace function can_view_real() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from profiles pr
+    where pr.id = auth.uid()
+      and (
+        pr.role in ('admin', 'manager', 'teamlead')
+        or exists (
+          select 1 from role_permissions rp
+          where rp.role = pr.role and rp.permission in ('users.view_real', 'users.manage')
+        )
+        or exists (
+          select 1 from user_permissions up
+          where up.user_id = pr.id and up.permission in ('users.view_real', 'users.manage') and up.granted = true
+        )
+      )
+  );
+$$;
+
 create or replace function _need(p text) returns void
 language plpgsql as $$
 begin
@@ -365,9 +384,7 @@ alter table bot_events enable row level security;
 create policy profiles_read on profiles for select to authenticated
   using (
     id = auth.uid()
-    or has_perm('users.view_real')
-    or has_perm('users.manage')
-    or (select role from profiles where id = auth.uid()) in ('admin', 'manager', 'teamlead')
+    or can_view_real()
   );
 create policy profiles_write on profiles for all to authenticated
   using (has_perm('users.manage')) with check (has_perm('users.manage'));
