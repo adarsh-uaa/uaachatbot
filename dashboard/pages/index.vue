@@ -24,7 +24,13 @@ let ticketChannel: any
 onMounted(async () => {
   sites.value = (await sb.from('sites').select('id,name').order('name')).data || []
   await load()
-  ticketChannel = sb.channel('dashboard-live-tickets')
+  if (ticketChannel) sb.removeChannel(ticketChannel)
+  const token = auth.session.value?.access_token
+  if (token && sb.realtime?.setAuth) {
+    try { await sb.realtime.setAuth(token) } catch {}
+  }
+  const topic = 'dashboard-live-tickets-' + (auth.session.value?.user?.id || 'staff')
+  ticketChannel = sb.channel(topic)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, loadLiveChats)
     .subscribe()
 })

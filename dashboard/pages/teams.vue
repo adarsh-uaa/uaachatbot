@@ -7,8 +7,14 @@ const staff = useStaff()
 const { show } = useToast()
 
 const activeTab = ref<'members' | 'roles'>('members')
-const canManage = computed(() => auth.can('users.manage'))
-const canViewReal = computed(() => auth.can('users.view_real') || auth.can('users.manage'))
+const canManage = computed(() => {
+  const r = auth.profile.value?.role
+  return r === 'admin' || auth.can('users.manage')
+})
+const canViewReal = computed(() => {
+  const r = auth.profile.value?.role
+  return r === 'admin' || r === 'manager' || r === 'teamlead' || auth.can('users.view_real') || auth.can('users.manage')
+})
 
 const users = ref<any[]>([])
 const perms = ref<any[]>([])

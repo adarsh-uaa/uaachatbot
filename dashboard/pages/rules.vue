@@ -222,7 +222,12 @@ async function seedAirportRules() {
       <tbody>
         <tr v-for="r in shown" :key="r.id" :style="{ opacity: r.is_active ? 1 : .55 }">
           <td>
-            <strong>{{ r.name }}</strong>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <strong>{{ r.name }}</strong>
+              <span v-if="r.button_label" class="chip" style="background:#eff6ff;color:#2563eb;font-size:.7rem;border:1px solid #bfdbfe" :title="'Interactive chip in widget: ' + r.button_label">
+                Pill: {{ r.button_label }}
+              </span>
+            </div>
             <small class="sub" style="display:block;font-size:.78rem;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
               {{ r.response }}
             </small>

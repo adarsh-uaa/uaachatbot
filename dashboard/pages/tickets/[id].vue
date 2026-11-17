@@ -30,8 +30,10 @@ async function load() {
   t.value = a.data
   msgs.value = (await sb.from('ticket_messages').select('*').eq('ticket_id', id).order('created_at')).data || []
   if (a.data.unread_by_staff) {
-    sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).then(() => {
+    sb.rpc('mark_ticket_read', { p_ticket: id }).then(() => {
       if (t.value) t.value.unread_by_staff = false
+    }).catch(() => {
+      sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).catch(() => {})
     })
   }
   nextTick(() => { const el = document.getElementById('thread'); if (el) el.scrollTop = el.scrollHeight })
@@ -55,7 +57,9 @@ async function doSend() {
   await act('staff_reply', { p_ticket: id, p_body: text, p_internal: note.value }, note.value ? 'Note saved' : 'Reply sent')
   if (!error.value) {
     body.value = ''
-    sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).catch(() => {})
+    sb.rpc('mark_ticket_read', { p_ticket: id }).catch(() => {
+      sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).catch(() => {})
+    })
   }
   showUnfilledWarningModal.value = false
 }
@@ -95,9 +99,17 @@ onMounted(async () => {
   if (!Object.keys(staff.map.value).length) await staff.load()
   await load()
   canned.value = (await sb.from('canned_replies').select('*').order('title')).data || []
-  ch = sb.channel('t-' + id)
+  
+  if (ch) sb.removeChannel(ch)
+  const token = auth.session.value?.access_token
+  if (token && sb.realtime?.setAuth) {
+    try { await sb.realtime.setAuth(token) } catch {}
+  }
+  const topic = 't-' + id + '-' + (auth.session.value?.user?.id || 'staff')
+  ch = sb.channel(topic)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'ticket_messages', filter: `ticket_id=eq.${id}` }, load)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tickets', filter: `id=eq.${id}` }, load).subscribe()
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tickets', filter: `id=eq.${id}` }, load)
+    .subscribe()
 })
 onBeforeUnmount(() => ch && sb.removeChannel(ch))
 </script>
@@ -191,7 +203,7 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
         <template v-if="lead && t.status !== 'closed'">
           <select v-model="assignTo" style="width:auto" aria-label="Assign to">
             <option value="">Reassign to…</option>
-            <option v-for="s in staff.list.value" :key="s.id" :value="s.id">{{ s.pseudo_name }} ({{ s.role }})</option>
+            <option v-for="s in staff.list.value" :key="s.id" :value="s.id">{{ staff.label(s.id) }} ({{ s.role }})</option>
           </select>
           <button class="btn alt" :disabled="!assignTo" @click="act('assign_ticket', { p_ticket: id, p_user: assignTo }, 'Ticket assigned')">
             Assign
@@ -259,13 +271,13 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
       <!-- Warning if passenger has not submitted contact form -->
       <div
         v-if="!isFormSubmitted && !note"
-        style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.85rem 1rem;margin-bottom:.75rem;display:flex;gap:.75rem;align-items:flex-start;max-width:100%;box-sizing:border-box"
+        class="unfilled-warning-banner"
       >
-        <span style="font-size:1.35rem;line-height:1;flex-shrink:0">⚠️</span>
-        <div style="flex:1 1 0%;min-width:0;word-break:break-word;overflow-wrap:anywhere">
-          <strong style="color:#92400e;font-size:.88rem;display:block;margin-bottom:.25rem">Passenger has not filled the contact form</strong>
-          <p style="margin:0;font-size:.82rem;color:#78350f;line-height:1.45;word-break:break-word;overflow-wrap:anywhere">
-            No verified name, email, or phone is on file. The passenger will only receive this reply if their live chat window is currently active. If they have closed their browser, they will not receive an email or callback notification.
+        <span class="warning-icon">⚠️</span>
+        <div class="warning-content">
+          <strong>Live Chat Only · Contact Form Not Submitted</strong>
+          <p>
+            No email or phone on file. Replies only reach passengers while their chat window is active.
           </p>
         </div>
       </div>
@@ -345,6 +357,47 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
 </template>
 
 <style scoped>
+.unfilled-warning-banner {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 0.65rem 0.9rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.warning-icon {
+  font-size: 1.15rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.warning-content {
+  flex: 1 1 0%;
+  min-width: 0;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.warning-content strong {
+  display: block;
+  font-size: 0.84rem;
+  color: #92400e;
+  line-height: 1.35;
+}
+.warning-content p {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: #78350f;
+  line-height: 1.4;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
 .delete-modal-backdrop {
   position: fixed;
   inset: 0;

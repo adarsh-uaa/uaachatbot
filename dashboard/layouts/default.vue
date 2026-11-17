@@ -40,18 +40,63 @@ const initials = computed(() => {
 })
 
 let channel: any
-onMounted(async () => {
+function subscribeNewTickets() {
+  if (channel) sb.removeChannel(channel)
   if (!auth.session.value) return
-  await staff.load()
-  canNotify.value = 'Notification' in window && Notification.permission === 'granted'
-  alarm.start()
-
-  channel = sb.channel('new-tickets')
+  const topic = 'new-tickets-' + (auth.session.value?.user?.id || 'staff')
+  channel = sb.channel(topic)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, (p: any) => {
-      beep(); show(`New ticket UAA-${p.new.ticket_no}: ${p.new.subject}`, 'info')
-      if (canNotify.value) new Notification('New support ticket', { body: p.new.subject })
+      const t = p?.new
+      // Only notify if passenger actually filled out the form and it's unclaimed
+      const isFilled = t && (t.form_submitted === true || (t.visitor_email && !t.visitor_email.includes('@uaa.chat')))
+      if (isFilled && !t.claimed_by && t.status !== 'closed') {
+        beep()
+        show(`New ticket UAA-${t.ticket_no}: ${t.subject || 'Assistance requested'}`, 'info')
+        if (canNotify.value) new Notification('New support ticket', { body: t.subject || 'Passenger submitted assistance form' })
+      }
       alarm.checkUnrespondedTickets()
-    }).subscribe()
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tickets' }, (p: any) => {
+      const t = p?.new
+      // As soon as ONE agent claims it, trigger off alarm and notification for all other users!
+      alarm.checkUnrespondedTickets()
+      if (t?.claimed_by) {
+        if (t.claimed_by !== auth.session.value?.user?.id) {
+          const claimedStaff = staff.label(t.claimed_by)
+          show(`Ticket UAA-${t.ticket_no} claimed by ${claimedStaff}`, 'info')
+        }
+      }
+    })
+    .subscribe()
+}
+
+watch(() => auth.session.value, async (s) => {
+  if (s) {
+    if (sb.realtime?.setAuth) {
+      try { await sb.realtime.setAuth(s.access_token) } catch {}
+    }
+    await staff.load()
+    alarm.start()
+    subscribeNewTickets()
+  } else {
+    alarm.destroy()
+    if (channel) {
+      sb.removeChannel(channel)
+      channel = null
+    }
+  }
+})
+
+onMounted(async () => {
+  if (auth.session.value) {
+    if (sb.realtime?.setAuth) {
+      try { await sb.realtime.setAuth(auth.session.value.access_token) } catch {}
+    }
+    await staff.load()
+    canNotify.value = 'Notification' in window && Notification.permission === 'granted'
+    alarm.start()
+    subscribeNewTickets()
+  }
 })
 onBeforeUnmount(() => {
   if (channel) sb.removeChannel(channel)

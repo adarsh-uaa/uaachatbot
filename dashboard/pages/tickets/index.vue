@@ -17,7 +17,14 @@ let ch: any
 onMounted(async () => {
   if (!Object.keys(staff.map.value).length) await staff.load()
   await load()
-  ch = sb.channel('tickets-list')
+  
+  if (ch) sb.removeChannel(ch)
+  const token = auth.session.value?.access_token
+  if (token && sb.realtime?.setAuth) {
+    try { await sb.realtime.setAuth(token) } catch {}
+  }
+  const topic = 'tickets-list-' + (auth.session.value?.user?.id || 'staff')
+  ch = sb.channel(topic)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, load)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticket_messages' }, load)
     .subscribe()

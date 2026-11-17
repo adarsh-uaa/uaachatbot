@@ -11,6 +11,9 @@ export const useAuth = () => {
     const { data } = await sb.auth.getSession()
     session.value = data.session
     if (data.session) {
+      if (sb.realtime?.setAuth) {
+        try { await sb.realtime.setAuth(data.session.access_token) } catch {}
+      }
       const uid = data.session.user.id
       const [p, pm, me] = await Promise.all([
         sb.from('staff_public').select('*').eq('id', uid).maybeSingle(),
@@ -23,8 +26,11 @@ export const useAuth = () => {
     ready.value = true
   }
   async function login(email: string, password: string) {
-    const { error } = await sb.auth.signInWithPassword({ email, password })
+    const { data, error } = await sb.auth.signInWithPassword({ email, password })
     if (error) throw error
+    if (data?.session && sb.realtime?.setAuth) {
+      try { await sb.realtime.setAuth(data.session.access_token) } catch {}
+    }
     await load()
   }
   async function logout() {
@@ -39,13 +45,15 @@ export const useAuth = () => {
 // pseudo names for everyone; "pseudo (real)" for people with users.view_real
 export const useStaff = () => {
   const sb = useSb()
-  const { can } = useAuth()
+  const { can, profile } = useAuth()
   const map = useState<Record<string, any>>('staffMap', () => ({}))
   async function load() {
     const { data } = await sb.from('staff_public').select('*')
     const m: Record<string, any> = {}
     ;(data || []).forEach((s: any) => (m[s.id] = { ...s }))
-    if (can('users.view_real')) {
+    const role = profile.value?.role
+    const canSeeReal = role === 'admin' || role === 'manager' || role === 'teamlead' || can('users.view_real') || can('users.manage')
+    if (canSeeReal) {
       const r = await sb.from('profiles').select('id,real_name,team_id')
       ;(r.data || []).forEach((p: any) => {
         if (m[p.id]) {

@@ -280,7 +280,7 @@ function handlePillClick(rule) {
 
 async function ask(text, rule) {
   if (!botChatEnabled.value) {
-    return await startLiveChat(text)
+    return startForm(text)
   }
   push('me', text)
   busy.value = true
@@ -345,7 +345,7 @@ async function ask(text, rule) {
     busy.value = false
   }
 }
-async function startForm(reason = 'Passenger requested live assistance') {
+function startForm(reason = 'Passenger requested live assistance') {
   mode.value = 'form'
   const chosenTopic = (typeof reason === 'string' && reason.trim()) ? reason.trim() : ''
   if (chosenTopic && !chosenTopic.startsWith('Passenger requested') && !chosenTopic.startsWith('Visitor requested') && !chosenTopic.startsWith('Passenger clicked') && !chosenTopic.startsWith('No matching')) {
@@ -355,38 +355,6 @@ async function startForm(reason = 'Passenger requested live assistance') {
     form.message = lastUserMsg
   }
   scroll()
-
-  const escalationMsg = (typeof reason === 'string' && reason.trim()) ? reason : (form.message || 'Passenger requested live assistance')
-
-  // Immediately notify Supabase so staff dashboard starts ringing the alarm right away!
-  try {
-    const res = await rpc('widget_escalate_to_team', {
-      p_site_key: props.siteKey,
-      p_token: token,
-      p_reason: escalationMsg
-    })
-    if (res?.token) {
-      token = res.token
-      localStorage.setItem(storeKey(), token)
-      startPolling()
-    }
-  } catch {
-    // If widget_escalate_to_team RPC is not yet in Supabase (e.g. before migration 013):
-    // Create an open ticket immediately using createTicketWithFallback to sound the alarm!
-    try {
-      const fallbackTicket = await createTicketWithFallback(
-        form.name || 'Passenger',
-        form.email || 'anonymous@uaa.chat',
-        null,
-        escalationMsg
-      )
-      if (fallbackTicket?.token) {
-        token = fallbackTicket.token
-        localStorage.setItem(storeKey(), token)
-        startPolling()
-      }
-    } catch {}
-  }
 }
 
 function cancelForm() {

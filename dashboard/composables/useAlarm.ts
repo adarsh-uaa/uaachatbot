@@ -18,9 +18,11 @@ const snoozedUntil = ref(0)
 const unrespondedTickets = ref<any[]>([])
 const sitesList = ref<AlarmSite[]>([])
 const isSettingsOpen = ref(false)
+const isAudioSuspended = ref(false)
 
 let audioCtx: AudioContext | null = null
 let alarmTimer: any = null
+let pollTimer: any = null
 let sbChannel: any = null
 
 function getAudioContext(): AudioContext | null {
@@ -182,7 +184,11 @@ export function useAlarm() {
     const unlock = () => {
       const ctx = getAudioContext()
       if (ctx && ctx.state === 'suspended') {
-        ctx.resume().catch(() => {})
+        ctx.resume().then(() => {
+          isAudioSuspended.value = false
+        }).catch(() => {})
+      } else if (ctx) {
+        isAudioSuspended.value = false
       }
     }
     window.addEventListener('click', unlock, { passive: true })
@@ -190,6 +196,14 @@ export function useAlarm() {
     window.addEventListener('focus', unlock, { passive: true })
     window.addEventListener('pointerdown', unlock, { passive: true })
     window.addEventListener('touchstart', unlock, { passive: true })
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          unlock()
+          checkUnrespondedTickets()
+        }
+      }, { passive: true })
+    }
   }
 
   function savePreferences() {
@@ -250,29 +264,50 @@ export function useAlarm() {
     } catch {}
   }
 
-  // Query tickets waiting for staff response or with unread visitor messages:
-  // - status === 'open' (escalated from bot or waiting for agent)
-  // - unread_by_staff === true (visitor sent a new message and staff hasn't read/replied)
+  function isFormFilled(t: any): boolean {
+    if (!t) return false
+    // Explicit database boolean flag
+    if (t.form_submitted === true) return true
+    // Real email provided (not an anonymous placeholder)
+    if (t.visitor_email && !t.visitor_email.includes('@uaa.chat') && !t.visitor_email.includes('anonymous')) {
+      return true
+    }
+    // Real phone number provided
+    if (t.visitor_phone && String(t.visitor_phone).trim().length > 0) {
+      return true
+    }
+    return false
+  }
+
+  // Query tickets waiting for staff response:
+  // - status !== 'closed'
+  // - claimed_by is null (unclaimed: nobody has responded/claimed it yet)
+  // - form_submitted === true (ONLY send alarm if passenger filled out the form)
+  // - status === 'open' or unread_by_staff === true
+  // As soon as ONE staff member claims or responds, claimed_by is set,
+  // which immediately silences the alarm and notification for ALL other users!
   async function checkUnrespondedTickets() {
     let list: any[] = []
     try {
       const res = await sb
         .from('tickets')
-        .select('id, ticket_no, visitor_name, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, escalation_alarm_enabled, theme)')
+        .select('id, ticket_no, visitor_name, visitor_email, visitor_phone, form_submitted, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, escalation_alarm_enabled, theme)')
         .neq('status', 'closed')
+        .is('claimed_by', null)
         .or('status.eq.open,unread_by_staff.eq.true')
         .order('updated_at', { ascending: false })
 
       if (!res.error && res.data) list = res.data
     } catch {}
 
-    // Fallback if escalation_alarm_enabled column is not in PostgREST schema cache
+    // Fallback if escalation_alarm_enabled or form_submitted column is not in PostgREST schema cache
     if (!list || list.length === 0) {
       try {
         const resFallback = await sb
           .from('tickets')
-          .select('id, ticket_no, visitor_name, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, theme)')
+          .select('id, ticket_no, visitor_name, visitor_email, visitor_phone, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, theme)')
           .neq('status', 'closed')
+          .is('claimed_by', null)
           .or('status.eq.open,unread_by_staff.eq.true')
           .order('updated_at', { ascending: false })
 
@@ -280,7 +315,15 @@ export function useAlarm() {
       } catch {}
     }
 
-    unrespondedTickets.value = list
+    // STRICT BUSINESS RULE:
+    // 1. Only send alarm IF visitor has filled out the contact form (form_submitted or real email/phone).
+    // 2. If ONE staff member claims or responds, claimed_by is set, IMMEDIATELY triggering off the alarm for all!
+    unrespondedTickets.value = (list || []).filter((t: any) => {
+      if (t.status === 'closed') return false
+      if (t.claimed_by) return false
+      if (!isFormFilled(t)) return false
+      return t.status === 'open' || t.unread_by_staff === true
+    })
     evaluateAlarmLoop()
   }
 
@@ -438,37 +481,71 @@ export function useAlarm() {
     loadSites()
     checkUnrespondedTickets()
 
-    if (!sbChannel) {
-      sbChannel = sb.channel('escalation-alarm-monitor')
-        // 1. Immediately sound alarm whenever visitor sends any message!
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticket_messages' }, async (payload: any) => {
-          const msg = payload?.new
-          if (msg && msg.sender === 'visitor') {
-            // Visitor messaged: ring alarm immediately!
+    // 1. Ensure token is set on Realtime socket for current user
+    const token = auth.session.value?.access_token
+    if (token && sb.realtime?.setAuth) {
+      try { sb.realtime.setAuth(token) } catch {}
+    }
+
+    // 2. 3-second backup polling loop ensures alarms ring across all staff tabs even if background WebSockets sleep
+    if (!pollTimer) {
+      pollTimer = setInterval(() => {
+        checkUnrespondedTickets()
+      }, 3000)
+    }
+
+    // 3. Reset channel so it connects with the authenticated session
+    if (sbChannel) {
+      sb.removeChannel(sbChannel)
+      sbChannel = null
+    }
+
+    const channelTopic = 'escalation-alarm-' + (auth.session.value?.user?.id || 'staff')
+    sbChannel = sb.channel(channelTopic)
+      // 1. Sound alarm whenever visitor sends any message on an unclaimed ticket
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticket_messages' }, async (payload: any) => {
+        const msg = payload?.new
+        if (msg && msg.sender === 'visitor') {
+          await checkUnrespondedTickets()
+          if (activeAlarmTickets.value.length > 0) {
             playTone(soundType.value, volume.value)
-            await checkUnrespondedTickets()
             notifyBrowser('UAA Airport Support', `New message: ${msg.body?.slice(0, 75) || 'Passenger replied'}`)
             show(`💬 Passenger messaged: "${msg.body?.slice(0, 50)}${msg.body?.length > 50 ? '…' : ''}"`, 'info')
           }
-        })
-        // 2. Sound alarm when ticket created or updated with unread visitor message
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, (payload: any) => {
-          const t = payload?.new
-          if (t && (t.unread_by_staff || t.status === 'open')) {
-            playTone(soundType.value, volume.value)
-          }
+        }
+      })
+      // 2. Sound alarm when form-submitted ticket is created/updated and unclaimed;
+      //    And immediately silence alarm for all users if someone claims or closes it!
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, async (payload: any) => {
+        const t = payload?.new
+        // If ticket was claimed by ANY staff member or closed: immediately re-evaluate and silence alarm for all!
+        if (t && (t.claimed_by || t.status === 'closed')) {
+          await checkUnrespondedTickets()
+          return
+        }
+        // Only sound alarm if the visitor has actually submitted the form!
+        if (t && !t.claimed_by && t.status !== 'closed' && isFormFilled(t) && (t.unread_by_staff || t.status === 'open')) {
+          playTone(soundType.value, volume.value)
+        }
+        await checkUnrespondedTickets()
+      })
+      // 3. Site settings changes
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sites' }, () => {
+        loadSites()
+      })
+      .subscribe((status: string) => {
+        if (status === 'SUBSCRIBED') {
           checkUnrespondedTickets()
-        })
-        // 3. Site settings changes
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'sites' }, () => {
-          loadSites()
-        })
-        .subscribe()
-    }
+        }
+      })
   }
 
   function destroy() {
     stopAlarm()
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
     if (sbChannel) {
       sb.removeChannel(sbChannel)
       sbChannel = null
@@ -483,6 +560,7 @@ export function useAlarm() {
     snoozedUntil,
     isSnoozed,
     isAlarming,
+    isAudioSuspended,
     unrespondedTickets,
     activeAlarmTickets,
     sitesList,
