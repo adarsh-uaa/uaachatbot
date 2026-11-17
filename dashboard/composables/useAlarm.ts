@@ -24,6 +24,9 @@ let audioCtx: AudioContext | null = null
 let alarmTimer: any = null
 let pollTimer: any = null
 let sbChannel: any = null
+let localBc: BroadcastChannel | null = null
+
+const SHARED_ALARM_CHANNEL = 'staff-alarm-sync'
 
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null
@@ -196,6 +199,38 @@ export function useAlarm() {
     window.addEventListener('focus', unlock, { passive: true })
     window.addEventListener('pointerdown', unlock, { passive: true })
     window.addEventListener('touchstart', unlock, { passive: true })
+
+    // Setup local BroadcastChannel for 0ms cross-tab sync in same browser
+    try {
+      if ('BroadcastChannel' in window && !localBc) {
+        localBc = new BroadcastChannel('uaa_staff_alarm_sync')
+        localBc.onmessage = (ev) => {
+          if (ev.data?.event === 'ticket_claimed') {
+            const id = ev.data.ticketId
+            if (id) {
+              unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== id)
+              evaluateAlarmLoop()
+            }
+            checkUnrespondedTickets()
+          } else if (ev.data?.event === 'ticket_escalated') {
+            checkUnrespondedTickets()
+          }
+        }
+      }
+    } catch {}
+
+    // Cross-tab storage event backup (fires across tabs on same origin when localStorage is written)
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'uaa:claimed_ticket_id' && e.newValue) {
+        const id = e.newValue.split(':')[0]
+        if (id) {
+          unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== id)
+          evaluateAlarmLoop()
+        }
+        checkUnrespondedTickets()
+      }
+    })
+
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
@@ -288,6 +323,7 @@ export function useAlarm() {
   // which immediately silences the alarm and notification for ALL other users!
   async function checkUnrespondedTickets() {
     let list: any[] = []
+    let queryFailed = false
     try {
       const res = await sb
         .from('tickets')
@@ -297,11 +333,17 @@ export function useAlarm() {
         .or('status.eq.open,unread_by_staff.eq.true')
         .order('updated_at', { ascending: false })
 
-      if (!res.error && res.data) list = res.data
-    } catch {}
+      if (res.error) {
+        queryFailed = true
+      } else {
+        list = res.data || []
+      }
+    } catch {
+      queryFailed = true
+    }
 
-    // Fallback if escalation_alarm_enabled or form_submitted column is not in PostgREST schema cache
-    if (!list || list.length === 0) {
+    // Fallback if escalation_alarm_enabled or form_submitted column is not yet in PostgREST schema cache
+    if (queryFailed) {
       try {
         const resFallback = await sb
           .from('tickets')
@@ -464,16 +506,63 @@ export function useAlarm() {
     evaluateAlarmLoop()
   }
 
+  function broadcastTicketClaimed(ticketId: string) {
+    if (!ticketId) return
+    // 1. Immediately remove from local list & silence alarm locally
+    unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== ticketId)
+    evaluateAlarmLoop()
+
+    // 2. Cross-tab localStorage trigger (0ms latency, zero network required)
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('uaa:claimed_ticket_id', `${ticketId}:${Date.now()}`)
+      } catch {}
+    }
+
+    // 3. Browser BroadcastChannel (0ms latency across tabs)
+    try {
+      localBc?.postMessage({ event: 'ticket_claimed', ticketId })
+    } catch {}
+
+    // 4. Supabase Realtime broadcast across all staff members on network
+    try {
+      if (sbChannel) {
+        sbChannel.send({
+          type: 'broadcast',
+          event: 'ticket_claimed',
+          payload: { ticketId }
+        }).catch(() => {})
+      }
+    } catch {}
+  }
+
   // One-click claim and respond (immediately silences the alarm for this ticket)
   async function claimAndRespond(ticketId: string) {
+    // 1. Immediately stop alarm sound and dismiss banner locally
+    unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== ticketId)
+    evaluateAlarmLoop()
+
+    // 2. Instantly notify all peer tabs and staff screens via Broadcast to silence their alarms too
+    broadcastTicketClaimed(ticketId)
+
+    // 3. Perform database claim
     const { error } = await sb.rpc('claim_ticket', { p_ticket: ticketId })
     if (error) {
-      show(error.message, 'err')
+      const msg = String(error.message || '').toLowerCase()
+      if (msg.includes('already claimed') || msg.includes('closed')) {
+        show('Ticket was already claimed by a teammate. Opening ticket…', 'info')
+      } else {
+        show(error.message, 'err')
+      }
     } else {
       show('Ticket claimed! Escalation alarm cleared.', 'ok')
-      await checkUnrespondedTickets()
-      navigateTo('/tickets/' + ticketId)
     }
+
+    // 4. Re-sync queue
+    await checkUnrespondedTickets()
+
+    // 5. ALWAYS navigate to the ticket page so the staff member can see it and never gets stuck
+    navigateTo('/tickets/' + ticketId)
   }
 
   function start() {
@@ -487,21 +576,33 @@ export function useAlarm() {
       try { sb.realtime.setAuth(token) } catch {}
     }
 
-    // 2. 3-second backup polling loop ensures alarms ring across all staff tabs even if background WebSockets sleep
+    // 2. 2.5-second backup polling loop ensures alarms ring across all staff tabs even if background WebSockets sleep
     if (!pollTimer) {
       pollTimer = setInterval(() => {
         checkUnrespondedTickets()
-      }, 3000)
+      }, 2500)
     }
 
-    // 3. Reset channel so it connects with the authenticated session
+    // 3. Reset channel so it connects with the authenticated session on shared topic
     if (sbChannel) {
       sb.removeChannel(sbChannel)
       sbChannel = null
     }
 
-    const channelTopic = 'escalation-alarm-' + (auth.session.value?.user?.id || 'staff')
+    const channelTopic = SHARED_ALARM_CHANNEL
     sbChannel = sb.channel(channelTopic)
+      // Broadcast event: instantly received when any staff member claims or responds
+      .on('broadcast', { event: 'ticket_claimed' }, (payload: any) => {
+        const id = payload?.payload?.ticketId
+        if (id) {
+          unrespondedTickets.value = unrespondedTickets.value.filter(t => t.id !== id)
+          evaluateAlarmLoop()
+        }
+        checkUnrespondedTickets()
+      })
+      .on('broadcast', { event: 'ticket_escalated' }, async () => {
+        await checkUnrespondedTickets()
+      })
       // 1. Sound alarm whenever visitor sends any message on an unclaimed ticket
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ticket_messages' }, async (payload: any) => {
         const msg = payload?.new
@@ -520,6 +621,10 @@ export function useAlarm() {
         const t = payload?.new
         // If ticket was claimed by ANY staff member or closed: immediately re-evaluate and silence alarm for all!
         if (t && (t.claimed_by || t.status === 'closed')) {
+          if (t.id) {
+            unrespondedTickets.value = unrespondedTickets.value.filter(x => x.id !== t.id)
+            evaluateAlarmLoop()
+          }
           await checkUnrespondedTickets()
           return
         }
@@ -550,6 +655,10 @@ export function useAlarm() {
       sb.removeChannel(sbChannel)
       sbChannel = null
     }
+    if (localBc) {
+      try { localBc.close() } catch {}
+      localBc = null
+    }
   }
 
   return {
@@ -577,6 +686,7 @@ export function useAlarm() {
     toggleSite,
     setAllSites,
     claimAndRespond,
+    broadcastTicketClaimed,
     savePreferences
   }
 }

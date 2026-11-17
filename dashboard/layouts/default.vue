@@ -43,8 +43,10 @@ let channel: any
 function subscribeNewTickets() {
   if (channel) sb.removeChannel(channel)
   if (!auth.session.value) return
-  const topic = 'new-tickets-' + (auth.session.value?.user?.id || 'staff')
-  channel = sb.channel(topic)
+  channel = sb.channel('staff-notifications-sync')
+    .on('broadcast', { event: 'ticket_claimed' }, () => {
+      alarm.checkUnrespondedTickets()
+    })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, (p: any) => {
       const t = p?.new
       // Only notify if passenger actually filled out the form and it's unclaimed
@@ -60,11 +62,9 @@ function subscribeNewTickets() {
       const t = p?.new
       // As soon as ONE agent claims it, trigger off alarm and notification for all other users!
       alarm.checkUnrespondedTickets()
-      if (t?.claimed_by) {
-        if (t.claimed_by !== auth.session.value?.user?.id) {
-          const claimedStaff = staff.label(t.claimed_by)
-          show(`Ticket UAA-${t.ticket_no} claimed by ${claimedStaff}`, 'info')
-        }
+      if (t?.claimed_by && t.claimed_by !== auth.session.value?.user?.id) {
+        const claimedStaff = staff.label(t.claimed_by)
+        show(`Ticket UAA-${t.ticket_no} claimed by ${claimedStaff}`, 'info')
       }
     })
     .subscribe()

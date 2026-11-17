@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const route = useRoute(), sb = useSb(), staff = useStaff(), auth = useAuth(), { show } = useToast()
+const route = useRoute(), sb = useSb(), staff = useStaff(), auth = useAuth(), alarm = useAlarm(), { show } = useToast()
 const id = route.params.id as string
 const t = ref<any>(null), msgs = ref<any[]>([]), canned = ref<any[]>([]), body = ref(''), note = ref(false), error = ref(''), assignTo = ref('')
 const me = computed(() => auth.session.value?.user.id)
@@ -32,8 +32,10 @@ async function load() {
   if (a.data.unread_by_staff) {
     sb.rpc('mark_ticket_read', { p_ticket: id }).then(() => {
       if (t.value) t.value.unread_by_staff = false
+      alarm.broadcastTicketClaimed(id)
     }).catch(() => {
       sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).catch(() => {})
+      alarm.broadcastTicketClaimed(id)
     })
   }
   nextTick(() => { const el = document.getElementById('thread'); if (el) el.scrollTop = el.scrollHeight })
@@ -41,7 +43,16 @@ async function load() {
 async function act(fn: string, args: any, ok: string) {
   error.value = ''
   const { error: e } = await sb.rpc(fn, args)
-  if (e) { error.value = e.message; show(e.message, 'err') } else { show(ok); await load() }
+  if (e) {
+    error.value = e.message
+    show(e.message, 'err')
+  } else {
+    show(ok)
+    if (fn === 'claim_ticket' || fn === 'close_ticket' || fn === 'staff_reply') {
+      alarm.broadcastTicketClaimed(id)
+    }
+    await load()
+  }
 }
 async function send() {
   if (!body.value.trim()) return
@@ -57,6 +68,7 @@ async function doSend() {
   await act('staff_reply', { p_ticket: id, p_body: text, p_internal: note.value }, note.value ? 'Note saved' : 'Reply sent')
   if (!error.value) {
     body.value = ''
+    alarm.broadcastTicketClaimed(id)
     sb.rpc('mark_ticket_read', { p_ticket: id }).catch(() => {
       sb.from('tickets').update({ unread_by_staff: false }).eq('id', id).catch(() => {})
     })

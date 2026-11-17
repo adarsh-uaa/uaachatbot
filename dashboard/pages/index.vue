@@ -1,6 +1,6 @@
 <script setup lang="ts">
 definePageMeta({ perm: 'dashboard.view' })
-const sb = useSb(), auth = useAuth(), { show } = useToast()
+const sb = useSb(), auth = useAuth(), alarm = useAlarm(), { show } = useToast()
 const days = ref(30), site = ref<string>(''), sites = ref<any[]>([]), s = ref<any>(null), error = ref('')
 const liveChats = ref<any[]>([])
 
@@ -48,6 +48,7 @@ async function takeOverChat(ticketId: string) {
     show(err.message, 'err')
   } else {
     show('Conversation claimed! Automated bot replies paused.', 'ok')
+    alarm.broadcastTicketClaimed(ticketId)
     navigateTo('/tickets/' + ticketId)
   }
 }

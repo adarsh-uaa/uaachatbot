@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const sb = useSb(), staff = useStaff(), auth = useAuth(), { show } = useToast()
+const sb = useSb(), staff = useStaff(), auth = useAuth(), alarm = useAlarm(), { show } = useToast()
 const rows = ref<any[]>([]), tab = ref('active'), q = ref(''), site = ref(''), error = ref('')
 
 // Multi-select & Bulk Delete state
@@ -123,6 +123,7 @@ async function quickClaim(ticketId: string) {
     show(err.message, 'err')
   } else {
     show('Chat claimed! Automated bot replies paused. You are now connected live.', 'ok')
+    alarm.broadcastTicketClaimed(ticketId)
     await load()
   }
 }
