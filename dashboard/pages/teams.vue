@@ -203,6 +203,59 @@ const filteredUsers = computed(() => {
     return true
   })
 })
+
+// Delete User Modal State
+const showDeleteModal = ref(false)
+const userToDelete = ref<any>(null)
+const isDeletingUser = ref(false)
+
+function confirmDelete(u: any) {
+  if (u.id === auth.session.value?.user?.id) {
+    show('You cannot delete your own account.', 'err')
+    return
+  }
+  userToDelete.value = u
+  showDeleteModal.value = true
+}
+
+async function executeDeleteUser() {
+  if (!userToDelete.value) return
+  isDeletingUser.value = true
+  const targetId = userToDelete.value.id
+  const targetName = userToDelete.value.pseudo_name || userToDelete.value.real_name || 'Member'
+
+  try {
+    // Attempt 1: Call admin_delete_user RPC
+    const { error: rpcErr } = await sb.rpc('admin_delete_user', { p_user_id: targetId })
+    if (rpcErr) {
+      // Attempt 2: Call server endpoint
+      try {
+        const session = auth.session.value
+        await $fetch('/api/users/delete', {
+          method: 'POST',
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {},
+          body: { user_id: targetId }
+        })
+      } catch (apiErr: any) {
+        // Attempt 3: Direct profile delete if caller has direct RLS delete permission
+        const { error: directErr } = await sb.from('profiles').delete().eq('id', targetId)
+        if (directErr) {
+          throw new Error(rpcErr.message || apiErr?.data?.message || directErr.message || 'Failed to delete user')
+        }
+      }
+    }
+
+    show(`Member "${targetName}" was permanently deleted.`, 'ok')
+    showDeleteModal.value = false
+    userToDelete.value = null
+    await staff.load()
+    await load()
+  } catch (err: any) {
+    show(err.message || 'Failed to delete user', 'err')
+  } finally {
+    isDeletingUser.value = false
+  }
+}
 </script>
 
 <template>
@@ -328,12 +381,20 @@ const filteredUsers = computed(() => {
                   {{ ticketStats[u.id] || 0 }} tickets
                 </span>
               </td>
-              <td v-if="canManage" class="row" style="white-space:nowrap">
-                <label style="margin:0;margin-right:.4rem;font-weight:400;display:inline-flex;align-items:center;gap:4px">
+              <td v-if="canManage" class="row" style="white-space:nowrap;gap:.4rem">
+                <label style="margin:0;margin-right:.25rem;font-weight:400;display:inline-flex;align-items:center;gap:4px">
                   <input type="checkbox" v-model="u.is_active" style="width:auto"> Active
                 </label>
                 <button class="btn sm amber" @click="saveUser(u)">Save</button>
                 <button class="btn sm alt" @click="sel = u">Permissions</button>
+                <button
+                  v-if="u.id !== auth.session.value?.user?.id"
+                  class="btn sm danger"
+                  @click="confirmDelete(u)"
+                  title="Permanently delete user"
+                >
+                  Delete
+                </button>
               </td>
             </tr>
           </tbody>
@@ -553,10 +614,61 @@ const filteredUsers = computed(() => {
         </form>
       </div>
     </div>
+
+    <!-- MODAL: DELETE USER CONFIRMATION -->
+    <div v-if="showDeleteModal && userToDelete" class="modal-backdrop" @click="showDeleteModal = false">
+      <div class="modal card" @click.stop style="max-width:480px;box-sizing:border-box">
+        <div class="row" style="gap:.75rem;align-items:center;margin-bottom:1rem">
+          <div class="del-user-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+          </div>
+          <div>
+            <h2 style="margin:0;font-size:1.15rem;color:var(--red)">Delete Team Member?</h2>
+            <p class="sub" style="margin:0;font-size:.82rem">{{ userToDelete.pseudo_name }} · Role: {{ userToDelete.role }}</p>
+          </div>
+        </div>
+
+        <p style="font-size:.9rem;line-height:1.5;margin-bottom:1rem;color:var(--ink)">
+          Are you sure you want to permanently delete <strong>{{ userToDelete.pseudo_name }}</strong><span v-if="userToDelete.real_name"> ({{ userToDelete.real_name }})</span>?
+        </p>
+
+        <div v-if="(ticketStats[userToDelete.id] || 0) > 0" style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.75rem 1rem;margin-bottom:1rem">
+          <strong style="color:#92400e;font-size:.84rem;display:block">⚠️ Active Tickets Notice</strong>
+          <p style="margin:.2rem 0 0 0;font-size:.8rem;color:#78350f;line-height:1.4">
+            This user currently has <strong>{{ ticketStats[userToDelete.id] }} active claimed ticket(s)</strong>. Deleting them will automatically unclaim these tickets and return them to the open queue.
+          </p>
+        </div>
+
+        <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:.75rem 1rem;margin-bottom:1.5rem">
+          <p style="margin:0;font-size:.82rem;color:#991b1b;line-height:1.4">
+            ⛔ <strong>Warning:</strong> Their login credentials, access permissions, and account profile will be permanently removed. This action cannot be undone.
+          </p>
+        </div>
+
+        <div class="row" style="justify-content:flex-end;gap:.6rem">
+          <button class="btn alt" :disabled="isDeletingUser" @click="showDeleteModal = false">
+            Cancel
+          </button>
+          <button class="btn danger" :disabled="isDeletingUser" @click="executeDeleteUser">
+            {{ isDeletingUser ? 'Deleting…' : 'Yes, Permanently Delete' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.del-user-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--red-soft);
+  color: var(--red);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
 .status-dot {
   display: inline-block;
   width: 8px;

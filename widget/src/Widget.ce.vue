@@ -6,7 +6,9 @@ const props = defineProps({
   apiUrl: String,
   apiKey: String,
   botEnabled: [Boolean, String],
-  bot: [Boolean, String]
+  bot: [Boolean, String],
+  botMode: [Boolean, String],
+  botChat: [Boolean, String]
 })
 
 const open = ref(false), cfg = ref(null), failed = ref(false)
@@ -141,18 +143,32 @@ const style = computed(() => [
 ].join(';'))
 
 const botChatEnabled = computed(() => {
-  // 1. Host app explicit prop override (e.g. <uaa-chat bot-enabled="true/false"> or bot="true/false")
-  if (props.botEnabled !== undefined && props.botEnabled !== null && props.botEnabled !== '') {
-    return props.botEnabled === true || props.botEnabled === 'true' || props.botEnabled === '1'
+  const checkVal = v => {
+    if (v === true || v === 'true' || v === '1' || v === 1) return true
+    if (v === false || v === 'false' || v === '0' || v === 0) return false
+    return null
   }
-  if (props.bot !== undefined && props.bot !== null && props.bot !== '') {
-    return props.bot === true || props.bot === 'true' || props.bot === '1'
-  }
+
+  // 1. Host app explicit prop overrides
+  const p1 = checkVal(props.botEnabled)
+  if (p1 !== null) return p1
+  const p2 = checkVal(props.bot)
+  if (p2 !== null) return p2
+  const p3 = checkVal(props.botMode)
+  if (p3 !== null) return p3
+  const p4 = checkVal(props.botChat)
+  if (p4 !== null) return p4
+
   // 2. Global window configuration if app defined window.UAA_BOT_ENABLED or window.uaaBotEnabled
   if (typeof window !== 'undefined') {
-    if (window.UAA_BOT_ENABLED !== undefined) return Boolean(window.UAA_BOT_ENABLED)
-    if (window.uaaBotEnabled !== undefined) return Boolean(window.uaaBotEnabled)
+    const w1 = checkVal(window.UAA_BOT_ENABLED)
+    if (w1 !== null) return w1
+    const w2 = checkVal(window.uaaBotEnabled)
+    if (w2 !== null) return w2
+    const w3 = checkVal(window.uaaBot)
+    if (w3 !== null) return w3
   }
+
   // 3. Database site settings from widget_config RPC
   if (cfg.value?.bot_chat_enabled !== undefined && cfg.value?.bot_chat_enabled !== null) {
     return cfg.value.bot_chat_enabled === true
@@ -164,8 +180,6 @@ const botChatEnabled = computed(() => {
 })
 
 const buttons = computed(() => {
-  // If bot is disabled, do NOT show suggestion texts/chips
-  if (!botChatEnabled.value) return []
   const list = cfg.value?.rules || []
   return list.filter(r => r.button_label && r.button_label.trim() !== '')
 })
@@ -187,9 +201,19 @@ async function rpc(name, args) {
 const norm = s => ' ' + s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '
 function match(text) {
   const n = norm(text)
-  // Only match rules configured from frontend / dashboard
   const siteRules = cfg.value?.rules || []
   for (const r of siteRules) {
+    // 1. Match button label (e.g. "Terminal amenities")
+    if (r.button_label) {
+      const bl = norm(r.button_label)
+      if (r.match_type === 'exact' ? n === bl : n.includes(bl)) return r
+    }
+    // 2. Match rule name
+    if (r.name) {
+      const nm = norm(r.name)
+      if (r.match_type === 'exact' ? n === nm : n.includes(nm)) return r
+    }
+    // 3. Match keywords
     for (const k of (r.keywords || [])) {
       const kk = norm(k)
       if (r.match_type === 'exact' ? n === kk : n.includes(kk)) return r
@@ -214,21 +238,74 @@ function answer(rule) {
 
 function handlePillClick(rule) {
   if (!botChatEnabled.value) {
-    // Bot mode is disabled: show form directly when they click!
+    // Bot mode is disabled: show form directly when clicked
     startForm(rule.button_label || rule.name)
     return
   }
-  // Bot mode is enabled: execute bot rule / handoff
-  ask(rule.button_label, rule)
+
+  push('me', rule.button_label)
+
+  if (rule.action === 'handoff') {
+    if (rule.response && !rule.response.toLowerCase().includes('could not find an answer') && !rule.response.toLowerCase().includes('find an answer')) {
+      push('bot', rule.response, { handoff: true })
+    }
+    startForm(rule.button_label || rule.name)
+    return
+  }
+
+  // Immediate instant answer for visitor with zero lag or fallback glitch
+  const link = rule.link_url || (rule.action === 'faq_link' ? cfg.value?.faq_url : null)
+  push('bot', rule.response, link ? { link, label: rule.button_label || 'Open link' } : {})
+
+  // Background sync with Supabase session & messages
+  rpc('widget_bot_chat', {
+    p_site_key: props.siteKey,
+    p_token: token,
+    p_query: rule.button_label
+  }).then(res => {
+    if (res?.token) {
+      token = res.token
+      localStorage.setItem(storeKey(), token)
+      startPolling()
+    }
+  }).catch(() => {
+    rpc('widget_log_query', {
+      p_site_key: props.siteKey,
+      p_query: rule.button_label,
+      p_rule: rule.id || null,
+      p_matched: true
+    }).catch(() => {})
+  })
 }
+
 async function ask(text, rule) {
   if (!botChatEnabled.value) {
     return await startLiveChat(text)
   }
   push('me', text)
   busy.value = true
+
+  // Check client rule match first for instant, accurate reply
+  const matched = rule || match(text)
+  if (matched) {
+    answer(matched)
+    // Sync with backend
+    rpc('widget_bot_chat', {
+      p_site_key: props.siteKey,
+      p_token: token,
+      p_query: text
+    }).then(res => {
+      if (res?.token) {
+        token = res.token
+        localStorage.setItem(storeKey(), token)
+        startPolling()
+      }
+    }).catch(() => {})
+    busy.value = false
+    return
+  }
+
   try {
-    // 1. Send query to backend bot chat RPC (which creates/tracks bot chat session)
     const res = await rpc('widget_bot_chat', {
       p_site_key: props.siteKey,
       p_token: token,
@@ -240,59 +317,30 @@ async function ask(text, rule) {
       startPolling()
     }
     if (res?.claimed) {
-      // Human agent has taken over this chat! Automated replies stop!
       mode.value = 'chat'
       live.value.agent = res.agent
       await poll()
       return
     }
 
-    // Check if backend returned a fallback response
     const isFallback = res?.handoff && (
       !res?.reply ||
       res?.reply.toLowerCase().includes('could not find an answer') ||
       res?.reply === t.value.fallback
     )
 
-    // If server fell back, check client-side default keyword rules before presenting fallback
     if (isFallback) {
-      const clientRule = rule || match(text)
-      if (clientRule) {
-        if (clientRule.action === 'handoff') {
-          push('bot', clientRule.response, { handoff: true })
-          startForm('Passenger requested: ' + (clientRule.button_label || text))
-        } else {
-          const link = clientRule.link_url || (clientRule.action === 'faq_link' ? cfg.value?.faq_url : null)
-          push('bot', clientRule.response, link ? { link, label: clientRule.button_label || 'Open link' } : {})
-        }
-        return
-      }
-    }
-
-    if (isFallback) {
-      // Do not display 'I could not find an answer for that. Would you like to talk to our team?'
-      // Open form directly prefilled with visitor query
+      // Direct form without unwanted text
       startForm(text)
     } else if (res?.reply) {
       const link = res.link_url || null
-      push('bot', res.reply, {
-        ...(link ? { link, label: res.button_label || 'Open link' } : {}),
-        ...(res.handoff ? { handoff: true } : {})
-      })
+      push('bot', res.reply, link ? { link, label: res.button_label || 'Open link' } : {})
       if (res.handoff) {
         startForm('Visitor requested team: ' + text)
       }
     }
   } catch {
-    // Fallback to client-side rule matching if offline or before migration
-    const r = rule || match(text)
-    rpc('widget_log_query', { p_site_key: props.siteKey, p_query: text, p_rule: r?.id || null, p_matched: !!r }).catch(() => {})
-    if (r) {
-      answer(r)
-    } else {
-      // No matching answer: open form directly without fallback bubble
-      startForm(text)
-    }
+    startForm(text)
   } finally {
     busy.value = false
   }
@@ -453,7 +501,14 @@ async function submitForm() {
     }
     token = r.token; localStorage.setItem(storeKey(), token)
     mode.value = 'chat'; await poll(); startPolling()
-  } catch (e) { error.value = e.message }
+  } catch (e) {
+    const raw = String(e?.message || '')
+    if (raw.toLowerCase().includes('origin not allowed')) {
+      error.value = 'Domain origin not permitted. In your Support Dashboard, please add this domain (or leave Allowed Domain Origins blank / set "*") in Site Settings.'
+    } else {
+      error.value = raw || 'Failed to submit form'
+    }
+  }
   finally { busy.value = false }
 }
 async function poll() {
@@ -478,15 +533,10 @@ async function poll() {
   }
 }
 function setInitialMode() {
-  mode.value = botChatEnabled.value ? 'bot' : 'form'
+  mode.value = 'bot'
 }
-watch(botChatEnabled, isBotOn => {
-  if (!token) {
-    mode.value = isBotOn ? 'bot' : 'form'
-    if (isBotOn && msgs.value.length === 0 && cfg.value?.texts?.greeting) {
-      msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
-    }
-  }
+watch(botChatEnabled, () => {
+  // Reactive watcher for when bot setting changes dynamically
 })
 function startPolling() {
   stopPolling()
@@ -527,7 +577,7 @@ onMounted(async () => {
   }
   try {
     cfg.value = await rpc('widget_config', { p_site_key: props.siteKey })
-    if (botChatEnabled.value && cfg.value?.texts?.greeting) {
+    if (cfg.value?.texts?.greeting) {
       msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
     }
     if (cfg.value?.theme?.defaultCountryCode) {
@@ -598,17 +648,15 @@ watch(open, v => {
       </header>
       <div ref="box" class="body" aria-live="polite">
         <template v-if="mode !== 'chat'">
-          <template v-if="botChatEnabled">
-            <div v-for="(m, i) in msgs" :key="i" class="m" :class="m.from">
-              {{ m.text }}
-              <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="lnk">{{ m.label }} →</a>
-            </div>
-            <div v-if="msgs.length < 2 && buttons.length && mode !== 'form'" class="chips">
-              <button v-for="b in buttons" :key="b.id || b.button_label" class="pill" @click="handlePillClick(b)">
-                {{ b.button_label }}
-              </button>
-            </div>
-          </template>
+          <div v-for="(m, i) in msgs" :key="i" class="m" :class="m.from">
+            {{ m.text }}
+            <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="lnk">{{ m.label }} →</a>
+          </div>
+          <div v-if="msgs.length < 2 && buttons.length && mode !== 'form'" class="chips">
+            <button v-for="b in buttons" :key="b.id || b.button_label" class="pill" @click="handlePillClick(b)">
+              {{ b.button_label }}
+            </button>
+          </div>
           <form v-if="mode === 'form'" class="form" @submit.prevent="submitForm">
             <div class="form-intro">
               <b>Connect with our Support Team</b>
@@ -640,7 +688,7 @@ watch(open, v => {
               {{ busy ? 'Submitting…' : 'Send to our team' }}
             </button>
             <button
-              v-if="!token && buttons.length && botChatEnabled"
+              v-if="!token && buttons.length"
               type="button"
               class="cancel-btn"
               @click="cancelForm"

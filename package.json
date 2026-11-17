@@ -1,0 +1,12 @@
+{
+  "name": "uaa-support",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:widget": "npm --prefix widget install && npm --prefix widget run build",
+    "build:dashboard": "npm --prefix dashboard install && npm --prefix dashboard run build",
+    "build": "npm --prefix widget install && npm --prefix widget run build && npm --prefix dashboard install && npm --prefix dashboard run build",
+    "start": "node dashboard/.output/server/index.mjs"
+  }
+}
+

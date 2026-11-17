@@ -577,8 +577,11 @@ const ICONS: Record<string, string> = {
               </div>
             </div>
 
-            <label>Allowed Domain Origins <small>(comma separated, e.g. https://www.airport.com; leave blank for any)</small></label>
-            <input v-model="f.origins" placeholder="https://yourdomain.com">
+            <label>Allowed Domain Origins <small>(comma separated, e.g. <code>https://yourdomain.com</code>, <code>*.yourdomain.com</code>; leave blank or enter <code>*</code> to allow all mobile & web origins)</small></label>
+            <input v-model="f.origins" placeholder="https://yourdomain.com, *.yourdomain.com (or leave blank for any)">
+            <p class="sub" style="margin:.3rem 0 0;font-size:.78rem">
+              💡 <strong>Mobile / Dev Tip:</strong> For mobile testing, local LAN testing (e.g. <code>192.168.x.x</code>), or mobile WebViews, leave this field blank or enter <code>*</code> to prevent "origin not allowed" blocks.
+            </p>
 
             <div class="row" style="margin-top:.85rem;justify-content:space-between">
               <label style="margin:0;font-weight:600;display:inline-flex;align-items:center;gap:.5rem;cursor:pointer">

@@ -15,6 +15,8 @@ function _mountWidget() {
     if (s.dataset.apiKey) el.setAttribute('api-key', s.dataset.apiKey)
     if (s.dataset.botEnabled !== undefined) el.setAttribute('bot-enabled', s.dataset.botEnabled)
     if (s.dataset.bot !== undefined) el.setAttribute('bot', s.dataset.bot)
+    if (s.dataset.botMode !== undefined) el.setAttribute('bot-mode', s.dataset.botMode)
+    if (s.dataset.botChat !== undefined) el.setAttribute('bot-chat', s.dataset.botChat)
     const add = () => { if (document.body && !document.querySelector('uaa-chat')) document.body.appendChild(el) }
     document.body ? add() : document.addEventListener('DOMContentLoaded', add)
   }
@@ -28,7 +30,10 @@ if (typeof window !== 'undefined') {
   window.setUaaBotEnabled = function(enabled) {
     window.UAA_BOT_ENABLED = Boolean(enabled)
     const el = document.querySelector('uaa-chat')
-    if (el) el.setAttribute('bot-enabled', String(enabled))
+    if (el) {
+      el.setAttribute('bot-enabled', String(enabled))
+      el.setAttribute('bot', String(enabled))
+    }
   }
 }
 export { UaaChat }
