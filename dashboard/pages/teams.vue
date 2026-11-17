@@ -372,7 +372,7 @@ async function executeDeleteUser() {
                 <template v-if="canManage">
                   <input v-model="u.real_name" style="min-width:140px">
                 </template>
-                <span v-else>{{ u.real_name || '—' }}</span>
+                <span v-else>{{ u.real_name || '-' }}</span>
               </td>
               <td>
                 <template v-if="canManage">

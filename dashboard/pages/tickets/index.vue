@@ -219,7 +219,7 @@ async function quickClaim(ticketId: string) {
             <span v-if="t.unread_by_staff && t.status !== 'closed'" class="dot" title="Unread visitor message" />
             <strong>UAA-{{ t.ticket_no }}</strong>
           </td>
-          <td><span class="sub" style="font-size:.85rem">{{ t.sites?.name || '—' }}</span></td>
+          <td><span class="sub" style="font-size:.85rem">{{ t.sites?.name || '-' }}</span></td>
           <td>
             <strong>{{ t.visitor_name || 'Anonymous Passenger' }}</strong>
             <small v-if="t.visitor_email" class="sub" style="display:block;font-size:.78rem">{{ t.visitor_email }}</small>

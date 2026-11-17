@@ -238,7 +238,7 @@ onBeforeUnmount(() => {
                 <strong>UAA-{{ firstAlarmTicket.ticket_no }}</strong>
                 ({{ firstAlarmTicket.sites?.name || 'Airport' }})
                 · Passenger: <em>{{ firstAlarmTicket.visitor_name || 'Anonymous' }}</em>
-                — {{ firstAlarmTicket.subject }}
+                - {{ firstAlarmTicket.subject }}
               </div>
             </div>
           </div>

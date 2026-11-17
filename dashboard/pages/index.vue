@@ -93,7 +93,7 @@ async function takeOverChat(ticketId: string) {
       </div>
       <div class="card stat" style="border-left-color: var(--accent);">
         <small>Avg First Reply</small>
-        <b>{{ s.avg_first_response_min != null ? `${s.avg_first_response_min}m` : '—' }}</b>
+        <b>{{ s.avg_first_response_min != null ? `${s.avg_first_response_min}m` : '-' }}</b>
         <span class="sub" style="font-size:.78rem">Response time</span>
       </div>
     </div>
@@ -133,7 +133,7 @@ async function takeOverChat(ticketId: string) {
                 <span v-if="t.unread_by_staff" class="dot" title="Unread visitor message" />
                 <strong>UAA-{{ t.ticket_no }}</strong>
               </td>
-              <td><span class="sub" style="font-size:.85rem">{{ t.sites?.name || '—' }}</span></td>
+              <td><span class="sub" style="font-size:.85rem">{{ t.sites?.name || '-' }}</span></td>
               <td>
                 <strong>{{ t.visitor_name || 'Passenger' }}</strong>
                 <small v-if="t.visitor_phone" style="display:block;font-size:.76rem;color:var(--teal)">📞 {{ t.visitor_phone }}</small>
