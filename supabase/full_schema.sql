@@ -239,6 +239,17 @@ language sql stable security definer set search_path = public as $$
   );
 $$;
 
+-- Check if user can delete tickets/chats (Admin and Manager only)
+create or replace function can_delete_tickets() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from profiles pr
+    where pr.id = auth.uid()
+      and pr.is_active = true
+      and pr.role in ('admin', 'manager')
+  );
+$$;
+
 create or replace function _need(p text) returns void
 language plpgsql as $$
 begin
@@ -423,7 +434,7 @@ create policy canned_write on canned_replies for all to authenticated
 create policy tickets_read on tickets for select to authenticated using (is_staff());
 create policy tickets_update on tickets for update to authenticated using (is_staff()) with check (is_staff());
 create policy tickets_delete on tickets for delete to authenticated
-  using (is_staff() or has_perm('sites.manage'));
+  using (can_delete_tickets());
 
 -- Messages: all active staff can view messages and receive Realtime message events
 create policy messages_read on ticket_messages for select to authenticated using (is_staff());
@@ -532,7 +543,10 @@ create or replace function widget_update_visitor_info(
   p_message text default null
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare t tickets;
+declare
+  t tickets;
+  clean_msg text;
+  last_visitor_body text;
 begin
   select * into t from tickets where visitor_token = p_token;
   if not found then raise exception 'conversation not found'; end if;
@@ -540,7 +554,7 @@ begin
   p_name := trim(coalesce(p_name, t.visitor_name));
   p_email := lower(trim(coalesce(p_email, '')));
   p_phone := trim(coalesce(p_phone, ''));
-  p_message := trim(coalesce(p_message, ''));
+  clean_msg := trim(coalesce(p_message, ''));
 
   if p_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
     raise exception 'Please enter a valid email';
@@ -552,11 +566,24 @@ begin
     visitor_phone = nullif(p_phone, ''),
     form_submitted = true,
     status = case when status = 'bot' then 'open'::ticket_status else status end,
+    subject = case
+      when clean_msg <> '' and (t.subject is null or t.subject like 'Passenger #%') then left(clean_msg, 80)
+      else t.subject
+    end,
     updated_at = now()
   where id = t.id;
 
-  if char_length(p_message) > 0 then
-    insert into ticket_messages(ticket_id, sender, body) values (t.id, 'visitor', p_message);
+  -- Only insert message if not empty AND not identical to the most recent visitor message on this ticket
+  if char_length(clean_msg) > 0 then
+    select body into last_visitor_body
+    from ticket_messages
+    where ticket_id = t.id and sender = 'visitor'
+    order by created_at desc
+    limit 1;
+
+    if last_visitor_body is null or trim(last_visitor_body) <> clean_msg then
+      insert into ticket_messages(ticket_id, sender, body) values (t.id, 'visitor', clean_msg);
+    end if;
   end if;
 
   return jsonb_build_object('token', t.visitor_token, 'ticket_no', t.ticket_no);
@@ -626,6 +653,20 @@ begin
 
   if p_token is not null then
     select * into t from tickets where visitor_token = p_token::uuid;
+  end if;
+
+  -- If bot chat is disabled and no existing ticket exists, immediately hand off to form without creating premature tickets
+  if not is_bot_on and t.id is null then
+    return jsonb_build_object(
+      'token', null,
+      'ticket_no', null,
+      'claimed', false,
+      'reply', null,
+      'link_url', null,
+      'button_label', null,
+      'handoff', true,
+      'status', 'open'
+    );
   end if;
 
   if t.id is null then
@@ -903,7 +944,9 @@ end $$;
 create or replace function delete_ticket(p_ticket uuid) returns boolean
 language plpgsql security definer set search_path = public as $$
 begin
-  if not is_staff() then raise exception 'Unauthorized' using errcode = '42501'; end if;
+  if not can_delete_tickets() then
+    raise exception 'Unauthorized: Only managers and admins can delete tickets.' using errcode = '42501';
+  end if;
   delete from tickets where id = p_ticket;
   return found;
 end $$;
@@ -913,7 +956,9 @@ create or replace function delete_tickets(p_tickets uuid[]) returns integer
 language plpgsql security definer set search_path = public as $$
 declare deleted_count integer;
 begin
-  if not is_staff() then raise exception 'Unauthorized' using errcode = '42501'; end if;
+  if not can_delete_tickets() then
+    raise exception 'Unauthorized: Only managers and admins can delete tickets.' using errcode = '42501';
+  end if;
   delete from tickets where id = any(p_tickets);
   get diagnostics deleted_count = row_count;
   return deleted_count;
@@ -991,9 +1036,13 @@ create or replace function admin_delete_user(p_user_id uuid) returns jsonb
 language plpgsql security definer set search_path = public, auth, extensions as $$
 declare
   caller_id uuid := auth.uid();
+  caller_role text;
   target_user auth.users%rowtype;
 begin
-  perform _need('users.manage');
+  select role::text into caller_role from profiles where id = caller_id;
+  if caller_role not in ('admin', 'manager') then
+    raise exception 'Unauthorized: Only managers and admins can delete users.' using errcode = '42501';
+  end if;
 
   if p_user_id = caller_id then raise exception 'You cannot delete your own account.'; end if;
 
@@ -1065,6 +1114,7 @@ grant execute on function assign_ticket(uuid, uuid) to authenticated;
 grant execute on function staff_reply(uuid, text, boolean) to authenticated;
 grant execute on function close_ticket(uuid) to authenticated;
 grant execute on function reopen_ticket(uuid) to authenticated;
+grant execute on function can_delete_tickets() to authenticated;
 grant execute on function delete_ticket(uuid) to authenticated;
 grant execute on function delete_tickets(uuid[]) to authenticated;
 grant execute on function delete_site(uuid) to authenticated;

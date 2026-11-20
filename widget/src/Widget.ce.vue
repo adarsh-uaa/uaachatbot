@@ -358,6 +358,7 @@ function startForm(reason = 'Passenger requested live assistance') {
 }
 
 function cancelForm() {
+  if (!botChatEnabled.value) return
   mode.value = 'bot'
   form.message = ''
   error.value = ''
@@ -453,13 +454,18 @@ async function submitForm() {
     form.phone = fullPhone
     let r
     if (token) {
+      // Avoid inserting duplicate message if form.message was already sent as a visitor message in this ticket
+      const lastUserMsg = [...msgs.value].reverse().find(m => m.from === 'me')?.text?.trim()
+      const alreadySent = lastUserMsg && lastUserMsg === form.message.trim()
+      const messagePayload = alreadySent ? '' : form.message.trim()
+
       // Update existing bot chat ticket with visitor details
       r = await rpc('widget_update_visitor_info', {
         p_token: token,
         p_name: form.name,
         p_email: form.email,
         p_phone: fullPhone || null,
-        p_message: form.message
+        p_message: messagePayload
       }).catch(async () => {
         // Fallback to widget_create_ticket with schema cache fallback
         return await createTicketWithFallback(form.name, form.email, fullPhone, form.message)
@@ -501,11 +507,13 @@ async function poll() {
   }
 }
 function setInitialMode() {
-  mode.value = 'bot'
+  mode.value = botChatEnabled.value ? 'bot' : 'form'
 }
-watch(botChatEnabled, () => {
-  // Reactive watcher for when bot setting changes dynamically
-})
+watch(botChatEnabled, (enabled) => {
+  if (!token && mode.value !== 'chat') {
+    mode.value = enabled ? 'bot' : 'form'
+  }
+}, { immediate: true })
 function startPolling() {
   stopPolling()
   timer = setInterval(poll, 4000)
@@ -545,7 +553,7 @@ onMounted(async () => {
   }
   try {
     cfg.value = await rpc('widget_config', { p_site_key: props.siteKey })
-    if (cfg.value?.texts?.greeting) {
+    if (botChatEnabled.value && cfg.value?.texts?.greeting) {
       msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
     }
     if (cfg.value?.theme?.defaultCountryCode) {
@@ -615,17 +623,22 @@ watch(open, v => {
         </button>
       </header>
       <div ref="box" class="body" aria-live="polite">
-        <template v-if="mode !== 'chat'">
+        <!-- 1. Bot Mode: Automated answers and suggestion pills -->
+        <template v-if="mode === 'bot'">
           <div v-for="(m, i) in msgs" :key="i" class="m" :class="m.from">
             {{ m.text }}
             <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="lnk">{{ m.label }} →</a>
           </div>
-          <div v-if="msgs.length < 2 && buttons.length && mode !== 'form'" class="chips">
+          <div v-if="msgs.length < 2 && buttons.length" class="chips">
             <button v-for="b in buttons" :key="b.id || b.button_label" class="pill" @click="handlePillClick(b)">
               {{ b.button_label }}
             </button>
           </div>
-          <form v-if="mode === 'form'" class="form" @submit.prevent="submitForm">
+        </template>
+
+        <!-- 2. Form Mode: Direct assistance contact form -->
+        <template v-else-if="mode === 'form'">
+          <form class="form" @submit.prevent="submitForm">
             <div class="form-intro">
               <b>Connect with our Support Team</b>
               <p class="sub">Please share your contact details below so our airport team can assist you.</p>
@@ -656,7 +669,7 @@ watch(open, v => {
               {{ busy ? 'Submitting…' : 'Send to our team' }}
             </button>
             <button
-              v-if="!token && buttons.length"
+              v-if="botChatEnabled && !token && buttons.length"
               type="button"
               class="cancel-btn"
               @click="cancelForm"
@@ -665,6 +678,8 @@ watch(open, v => {
             </button>
           </form>
         </template>
+
+        <!-- 3. Live Chat Mode: Active agent conversation -->
         <template v-else>
           <div
             v-for="(m, i) in live.messages"
@@ -681,7 +696,7 @@ watch(open, v => {
           </div>
         </template>
       </div>
-      <footer v-if="mode !== 'form' && live.status !== 'closed'">
+      <footer v-if="(mode === 'chat' && live.status !== 'closed') || (mode === 'bot' && botChatEnabled)">
         <p v-if="error && mode !== 'form'" class="err">{{ error }}</p>
         <div class="send-bar">
           <input

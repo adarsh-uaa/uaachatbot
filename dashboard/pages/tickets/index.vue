@@ -3,6 +3,10 @@ const sb = useSb(), staff = useStaff(), auth = useAuth(), alarm = useAlarm(), { 
 const rows = ref<any[]>([]), tab = ref('active'), q = ref(''), site = ref(''), error = ref('')
 
 // Multi-select & Bulk Delete state
+const canDelete = computed(() => {
+  const r = auth.profile.value?.role
+  return r === 'admin' || r === 'manager'
+})
 const selectedIds = ref<string[]>([])
 const showDeleteModal = ref(false)
 const isDeleting = ref(false)
@@ -61,6 +65,7 @@ const isAllSelected = computed(() => shown.value.length > 0 && shown.value.every
 const isIndeterminate = computed(() => selectedIds.value.length > 0 && !isAllSelected.value)
 
 function toggleSelect(id: string) {
+  if (!canDelete.value) return
   if (selectedIds.value.includes(id)) {
     selectedIds.value = selectedIds.value.filter(x => x !== id)
   } else {
@@ -69,6 +74,7 @@ function toggleSelect(id: string) {
 }
 
 function toggleSelectAll() {
+  if (!canDelete.value) return
   if (isAllSelected.value) {
     selectedIds.value = []
   } else {
@@ -77,6 +83,7 @@ function toggleSelectAll() {
 }
 
 function selectAllFiltered() {
+  if (!canDelete.value) return
   selectedIds.value = shown.value.map(t => t.id)
 }
 
@@ -85,6 +92,10 @@ function clearSelection() {
 }
 
 function confirmSingleDelete(ticket: any) {
+  if (!canDelete.value) {
+    show('Only managers and admins can delete tickets.', 'err')
+    return
+  }
   singleDeleteTarget.value = ticket
   showDeleteModal.value = true
 }
@@ -92,6 +103,10 @@ function confirmSingleDelete(ticket: any) {
 const targetDeleteCount = computed(() => singleDeleteTarget.value ? 1 : selectedIds.value.length)
 
 async function executeDelete() {
+  if (!canDelete.value) {
+    show('Only managers and admins can delete tickets.', 'err')
+    return
+  }
   const ids = singleDeleteTarget.value ? [singleDeleteTarget.value.id] : [...selectedIds.value]
   if (!ids.length) return
 
@@ -155,7 +170,7 @@ async function quickClaim(ticketId: string) {
   </div>
 
   <!-- Bulk Selection Toolbar -->
-  <div v-if="selectedIds.length > 0" class="bulk-toolbar card">
+  <div v-if="canDelete && selectedIds.length > 0" class="bulk-toolbar card">
     <div class="row" style="gap:.75rem;align-items:center;flex-wrap:wrap">
       <span class="bulk-pill">
         ✓ {{ selectedIds.length }} chat{{ selectedIds.length > 1 ? 's' : '' }} selected
@@ -179,7 +194,7 @@ async function quickClaim(ticketId: string) {
     <table>
       <thead>
         <tr>
-          <th style="width:38px;padding-left:14px;padding-right:4px">
+          <th v-if="canDelete" style="width:38px;padding-left:14px;padding-right:4px">
             <input
               type="checkbox"
               :checked="isAllSelected"
@@ -196,7 +211,7 @@ async function quickClaim(ticketId: string) {
           <th>Status</th>
           <th>Owner</th>
           <th>Activity</th>
-          <th style="width:38px"></th>
+          <th v-if="canDelete" style="width:38px"></th>
         </tr>
       </thead>
       <tbody>
@@ -204,10 +219,10 @@ async function quickClaim(ticketId: string) {
           v-for="t in shown"
           :key="t.id"
           class="click"
-          :class="{ 'row-highlight': selectedIds.includes(t.id) }"
+          :class="{ 'row-highlight': canDelete && selectedIds.includes(t.id) }"
           @click="navigateTo('/tickets/' + t.id)"
         >
-          <td style="padding-left:14px;padding-right:4px" @click.stop>
+          <td v-if="canDelete" style="padding-left:14px;padding-right:4px" @click.stop>
             <input
               type="checkbox"
               :checked="selectedIds.includes(t.id)"
@@ -251,7 +266,7 @@ async function quickClaim(ticketId: string) {
           <td>
             <span class="sub" style="font-size:.82rem">{{ ago(t.updated_at) }}</span>
           </td>
-          <td @click.stop>
+          <td v-if="canDelete" @click.stop>
             <button
               class="btn-row-del"
               @click.stop="confirmSingleDelete(t)"
@@ -267,7 +282,7 @@ async function quickClaim(ticketId: string) {
   </div>
 
   <!-- Delete Confirmation Modal -->
-  <div v-if="showDeleteModal" class="delete-modal-backdrop" @click="showDeleteModal = false">
+  <div v-if="canDelete && showDeleteModal" class="delete-modal-backdrop" @click="showDeleteModal = false">
     <div class="delete-modal card" @click.stop>
       <div class="row" style="gap:.75rem;align-items:center;margin-bottom:1rem">
         <div class="del-modal-icon">

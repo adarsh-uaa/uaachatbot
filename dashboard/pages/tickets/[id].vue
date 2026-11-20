@@ -87,8 +87,16 @@ async function copyTicket() {
 
 const confirmDeleteModal = ref(false)
 const isDeleting = ref(false)
+const canDelete = computed(() => {
+  const r = auth.profile.value?.role
+  return r === 'admin' || r === 'manager'
+})
 
 async function deleteChat() {
+  if (!canDelete.value) {
+    show('Only managers and admins can delete conversations.', 'err')
+    return
+  }
   isDeleting.value = true
   try {
     const { error: rpcErr } = await sb.rpc('delete_ticket', { p_ticket: id })
@@ -228,7 +236,7 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
           <button class="btn alt sm" @click="copyTicket">
             Copy transcript
           </button>
-          <button class="btn danger sm" @click="confirmDeleteModal = true" title="Delete conversation">
+          <button v-if="canDelete" class="btn danger sm" @click="confirmDeleteModal = true" title="Delete conversation">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
             <span>Delete chat</span>
           </button>
@@ -312,7 +320,7 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
     </div>
 
     <!-- Delete Ticket Modal -->
-    <div v-if="confirmDeleteModal" class="delete-modal-backdrop" @click="confirmDeleteModal = false">
+    <div v-if="canDelete && confirmDeleteModal" class="delete-modal-backdrop" @click="confirmDeleteModal = false">
       <div class="delete-modal card" @click.stop>
         <div class="row" style="gap:.75rem;align-items:center;margin-bottom:1rem">
           <div class="del-modal-icon">

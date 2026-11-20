@@ -31,8 +31,18 @@ export default defineEventHandler(async (event) => {
 
   // Get caller user ID to prevent self-deletion
   const { data: userData } = await callerClient.auth.getUser()
-  if (userData?.user?.id === user_id) {
+  if (!userData?.user?.id) {
+    throw createError({ statusCode: 401, message: 'Invalid session' })
+  }
+  if (userData.user.id === user_id) {
     throw createError({ statusCode: 400, message: 'You cannot delete your own account' })
+  }
+
+  // Verify caller has role admin or manager
+  const { data: callerProfile } = await callerClient.from('profiles').select('role').eq('id', userData.user.id).maybeSingle()
+  const callerRole = callerProfile?.role
+  if (callerRole !== 'admin' && callerRole !== 'manager') {
+    throw createError({ statusCode: 403, message: 'Unauthorized: Only managers and admins can delete team members' })
   }
 
   // If service role key is available, perform full admin delete

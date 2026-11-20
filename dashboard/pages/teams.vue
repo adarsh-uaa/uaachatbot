@@ -15,6 +15,10 @@ const canViewReal = computed(() => {
   const r = auth.profile.value?.role
   return r === 'admin' || r === 'manager' || r === 'teamlead' || auth.can('users.view_real') || auth.can('users.manage')
 })
+const canDeleteUser = computed(() => {
+  const r = auth.profile.value?.role
+  return r === 'admin' || r === 'manager'
+})
 
 const users = ref<any[]>([])
 const perms = ref<any[]>([])
@@ -216,6 +220,10 @@ const userToDelete = ref<any>(null)
 const isDeletingUser = ref(false)
 
 function confirmDelete(u: any) {
+  if (!canDeleteUser.value) {
+    show('Only managers and admins can delete team members.', 'err')
+    return
+  }
   if (u.id === auth.session.value?.user?.id) {
     show('You cannot delete your own account.', 'err')
     return
@@ -225,6 +233,10 @@ function confirmDelete(u: any) {
 }
 
 async function executeDeleteUser() {
+  if (!canDeleteUser.value) {
+    show('Only managers and admins can delete team members.', 'err')
+    return
+  }
   if (!userToDelete.value) return
   isDeletingUser.value = true
   const targetId = userToDelete.value.id
@@ -394,7 +406,7 @@ async function executeDeleteUser() {
                 <button class="btn sm amber" @click="saveUser(u)">Save</button>
                 <button class="btn sm alt" @click="sel = u">Permissions</button>
                 <button
-                  v-if="u.id !== auth.session.value?.user?.id"
+                  v-if="canDeleteUser && u.id !== auth.session.value?.user?.id"
                   class="btn sm danger"
                   @click="confirmDelete(u)"
                   title="Permanently delete user"
@@ -622,7 +634,7 @@ async function executeDeleteUser() {
     </div>
 
     <!-- MODAL: DELETE USER CONFIRMATION -->
-    <div v-if="showDeleteModal && userToDelete" class="modal-backdrop" @click="showDeleteModal = false">
+    <div v-if="canDeleteUser && showDeleteModal && userToDelete" class="modal-backdrop" @click="showDeleteModal = false">
       <div class="modal card" @click.stop style="max-width:480px;box-sizing:border-box">
         <div class="row" style="gap:.75rem;align-items:center;margin-bottom:1rem">
           <div class="del-user-icon">
