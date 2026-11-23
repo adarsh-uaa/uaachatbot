@@ -18,9 +18,11 @@ const snoozedUntil = ref(0)
 const unrespondedTickets = ref<any[]>([])
 const sitesList = ref<AlarmSite[]>([])
 const isSettingsOpen = ref(false)
-const isAudioSuspended = ref(false)
+const isAudioSuspended = ref(true)
 
 let audioCtx: AudioContext | null = null
+let silentKeepAliveGain: GainNode | null = null
+let silentKeepAliveOsc: OscillatorNode | null = null
 let bgAudio: HTMLAudioElement | null = null
 let bgWorker: Worker | null = null
 let alarmTimer: any = null
@@ -50,7 +52,6 @@ function startMediaAudio() {
       audio.src = soundSrc
     }
     audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
-    // Native looping in HTML5 Audio plays seamlessly through OS mixer in background / minimized tabs!
     audio.loop = (intervalSec.value === 0)
     const p = audio.play()
     if (p && typeof p.catch === 'function') {
@@ -95,23 +96,63 @@ function stopTitleFlash() {
   }
 }
 
-function initBackgroundWorker(onTick: () => void) {
+// Keep-Alive: Continuous silent rendering pipeline prevents Chromium from ever suspending AudioContext in background tabs!
+function startAudioKeepAlive() {
+  try {
+    const ctx = getAudioContext()
+    if (!ctx) return
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => {
+        setupSilentNodes(ctx)
+      }).catch(() => {})
+    } else {
+      setupSilentNodes(ctx)
+    }
+  } catch {}
+}
+
+function setupSilentNodes(ctx: AudioContext) {
+  if (silentKeepAliveGain) return
+  try {
+    // Volume 0.00001 (-100dB, completely inaudible to human ear)
+    // but guarantees Chrome considers the AudioContext actively rendering audio frames!
+    silentKeepAliveGain = ctx.createGain()
+    silentKeepAliveGain.gain.setValueAtTime(0.00001, ctx.currentTime)
+    silentKeepAliveGain.connect(ctx.destination)
+
+    silentKeepAliveOsc = ctx.createOscillator()
+    silentKeepAliveOsc.frequency.setValueAtTime(440, ctx.currentTime)
+    silentKeepAliveOsc.connect(silentKeepAliveGain)
+    silentKeepAliveOsc.start()
+    isAudioSuspended.value = false
+  } catch {}
+}
+
+function initBackgroundWorker(onTick: () => void, onAlarmTick: () => void) {
   if (typeof window === 'undefined' || typeof Worker === 'undefined' || bgWorker) return
   try {
-    // Web Worker setInterval is NEVER throttled by Chromium in background or minimized tabs!
+    // Web Worker setInterval runs on a separate OS thread and is NEVER throttled by Chromium when minimized!
     const workerCode = `
-      let timer = null;
+      let pollTimer = null;
+      let alarmTimer = null;
+
       self.onmessage = function(e) {
-        if (e.data.action === 'start') {
-          if (timer) clearInterval(timer);
-          const ms = Math.max(500, e.data.interval || 2000);
-          timer = setInterval(function() {
-            self.postMessage('tick');
-          }, ms);
-        } else if (e.data.action === 'stop') {
-          if (timer) {
-            clearInterval(timer);
-            timer = null;
+        const data = e.data || {};
+        if (data.action === 'start_polling') {
+          if (pollTimer) clearInterval(pollTimer);
+          pollTimer = setInterval(function() {
+            self.postMessage({ type: 'poll' });
+          }, 2000);
+        } else if (data.action === 'start_alarm') {
+          if (alarmTimer) clearInterval(alarmTimer);
+          const delay = Math.max(400, data.delay || 850);
+          alarmTimer = setInterval(function() {
+            self.postMessage({ type: 'alarm_tick' });
+          }, delay);
+        } else if (data.action === 'stop_alarm') {
+          if (alarmTimer) {
+            clearInterval(alarmTimer);
+            alarmTimer = null;
           }
         }
       };
@@ -120,18 +161,21 @@ function initBackgroundWorker(onTick: () => void) {
     const workerUrl = URL.createObjectURL(blob)
     bgWorker = new Worker(workerUrl)
     bgWorker.onmessage = (e) => {
-      if (e.data === 'tick') {
+      const type = e.data?.type
+      if (type === 'poll') {
         onTick()
+      } else if (type === 'alarm_tick') {
+        onAlarmTick()
       }
     }
-    bgWorker.postMessage({ action: 'start', interval: 2000 })
+    bgWorker.postMessage({ action: 'start_polling' })
   } catch {}
 }
 
 function stopBackgroundWorker() {
   if (bgWorker) {
     try {
-      bgWorker.postMessage({ action: 'stop' })
+      bgWorker.postMessage({ action: 'stop_alarm' })
       bgWorker.terminate()
     } catch {}
     bgWorker = null
@@ -276,6 +320,42 @@ export function useAlarm() {
   const sb = useSb()
   const { show } = useToast()
 
+  // Unlock Web Audio context, start silent keep-alive, and warm HTML5 audio element
+  function unlock() {
+    const ctx = getAudioContext()
+    if (ctx) {
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(() => {
+          isAudioSuspended.value = false
+          startAudioKeepAlive()
+        }).catch(() => {})
+      } else {
+        isAudioSuspended.value = false
+        startAudioKeepAlive()
+      }
+    }
+
+    // Pre-warm HTML5 audio element so browser grants background autoplay authorization
+    const audio = getAlarmAudio()
+    if (audio && !audio.src) {
+      audio.src = `/sounds/${soundType.value}.wav`
+      audio.volume = 0.001
+      const p = audio.play()
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          audio.pause()
+          audio.currentTime = 0
+          audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
+        }).catch(() => {})
+      }
+    }
+
+    // Proactively request browser desktop notifications
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {})
+    }
+  }
+
   // Load preferences from localStorage on client
   function initPreferences() {
     if (typeof window === 'undefined') return
@@ -293,37 +373,6 @@ export function useAlarm() {
     const v = localStorage.getItem('uaa:alarm_volume')
     if (v && !isNaN(Number(v))) volume.value = Number(v)
 
-    // Unlock Web Audio context and HTML5 media audio on user interactions with window
-    const unlock = () => {
-      const ctx = getAudioContext()
-      if (ctx && ctx.state === 'suspended') {
-        ctx.resume().then(() => {
-          isAudioSuspended.value = false
-        }).catch(() => {})
-      } else if (ctx) {
-        isAudioSuspended.value = false
-      }
-
-      // Pre-warm HTML5 audio element so browser grants background autoplay authorization
-      const audio = getAlarmAudio()
-      if (audio && !audio.src) {
-        audio.src = `/sounds/${soundType.value}.wav`
-        audio.volume = 0.001
-        const p = audio.play()
-        if (p && typeof p.then === 'function') {
-          p.then(() => {
-            audio.pause()
-            audio.currentTime = 0
-            audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
-          }).catch(() => {})
-        }
-      }
-
-      // Proactively request browser desktop notifications
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission().catch(() => {})
-      }
-    }
     window.addEventListener('click', unlock, { passive: true })
     window.addEventListener('keydown', unlock, { passive: true })
     window.addEventListener('focus', unlock, { passive: true })
@@ -550,10 +599,10 @@ export function useAlarm() {
 
   function evaluateAlarmLoop() {
     if (isAlarming.value) {
-      // 1. Start native HTML5 media audio loop (works seamlessly when tab is minimized or in background)
+      // 1. Play sound immediately on this tick
       startMediaAudio()
       startTitleFlash()
-      // 2. Play Web Audio tone for foreground responsiveness
+      // 2. Play Web Audio tone directly through active keep-alive destination
       playTone(soundType.value, volume.value)
 
       notifyBrowser(
@@ -561,8 +610,14 @@ export function useAlarm() {
         `${activeAlarmTickets.value.length} passenger enquiry waiting for staff response. Click to view.`
       )
 
-      if (!alarmTimer && intervalSec.value > 0) {
-        const delayMs = Math.max(1, intervalSec.value) * 1000
+      // 3. Start un-throttled Web Worker alarm timer for continuous background ringing
+      const delayMs = intervalSec.value === 0 ? 850 : Math.max(1, intervalSec.value) * 1000
+      if (bgWorker) {
+        bgWorker.postMessage({ action: 'start_alarm', delay: delayMs })
+      }
+
+      // 4. Fallback standard timer for main thread
+      if (!alarmTimer) {
         alarmTimer = setInterval(() => {
           if (isAlarming.value) {
             startMediaAudio()
@@ -580,6 +635,9 @@ export function useAlarm() {
   function stopAlarm() {
     stopMediaAudio()
     stopTitleFlash()
+    if (bgWorker) {
+      bgWorker.postMessage({ action: 'stop_alarm' })
+    }
     if (alarmTimer) {
       clearInterval(alarmTimer)
       alarmTimer = null
@@ -781,13 +839,17 @@ export function useAlarm() {
     }
 
     // 2. Initialize un-throttled Web Worker background timer so checks and alarms run uninterrupted even if tab is minimized
-    initBackgroundWorker(() => {
-      checkUnrespondedTickets()
-      if (isAlarming.value && intervalSec.value > 0) {
-        startMediaAudio()
-        playTone(soundType.value, volume.value)
+    initBackgroundWorker(
+      () => {
+        checkUnrespondedTickets()
+      },
+      () => {
+        if (isAlarming.value) {
+          startMediaAudio()
+          playTone(soundType.value, volume.value)
+        }
       }
-    })
+    )
 
     // Fallback standard interval
     if (!pollTimer) {
@@ -852,6 +914,10 @@ export function useAlarm() {
         }
         // Only sound alarm if the visitor has actually submitted the form AND ticket is unread!
         if (t && !t.claimed_by && t.status !== 'closed' && t.unread_by_staff === true && isFormFilled(t)) {
+          const exists = unrespondedTickets.value.find(x => x.id === t.id)
+          if (!exists) {
+            unrespondedTickets.value = [t, ...unrespondedTickets.value]
+          }
           evaluateAlarmLoop()
         }
         await checkUnrespondedTickets()
@@ -911,6 +977,7 @@ export function useAlarm() {
     claimAndRespond,
     broadcastTicketOpened,
     broadcastTicketClaimed,
-    savePreferences
+    savePreferences,
+    unlock
   }
 }

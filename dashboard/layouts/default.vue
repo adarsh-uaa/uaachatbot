@@ -218,6 +218,20 @@ onBeforeUnmount(() => {
 
     <!-- Main Content Area with Persistent Escalation Alarm Banner -->
     <main class="main">
+      <!-- Background Audio Activation Banner (Appears if user hasn't clicked yet on this tab) -->
+      <div v-if="alarm.isAudioSuspended.value" class="audio-unlock-banner" @click="alarm.unlock()">
+        <div style="display:flex;align-items:center;gap:.65rem">
+          <span style="font-size:1.25rem">🔔</span>
+          <div>
+            <strong style="display:block;font-size:.85rem;color:#1e40af">Background Audio Alerts</strong>
+            <span style="font-size:.78rem;color:#2563eb">Click here or anywhere on the page so alarms can ring when this tab is minimized or in the background.</span>
+          </div>
+        </div>
+        <button class="btn sm" style="background:#2563eb;color:#fff;font-weight:600;padding:4px 12px;border:none;border-radius:6px;cursor:pointer">
+          Enable Background Sound
+        </button>
+      </div>
+
       <!-- 🚨 Persistent Escalation Alarm Banner (Runs continuously until ticket is opened, claimed, or responded) -->
       <div v-if="activeAlarmTickets.length > 0 && firstAlarmTicket" class="escalation-alert-banner" :class="{ snoozed: isSnoozed }">
         <div class="banner-inner">
@@ -585,6 +599,22 @@ onBeforeUnmount(() => {
 @keyframes alertPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
   50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+}
+.audio-unlock-banner {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: .75rem 1.25rem;
+  margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.audio-unlock-banner:hover {
+  background: #dbeafe;
 }
 .banner-inner {
   display: flex;
