@@ -21,12 +21,122 @@ const isSettingsOpen = ref(false)
 const isAudioSuspended = ref(false)
 
 let audioCtx: AudioContext | null = null
+let bgAudio: HTMLAudioElement | null = null
+let bgWorker: Worker | null = null
 let alarmTimer: any = null
 let pollTimer: any = null
+let titleFlashTimer: any = null
+let originalDocTitle = ''
 let sbChannel: any = null
 let localBc: BroadcastChannel | null = null
 
 const SHARED_ALARM_CHANNEL = 'staff-alarm-sync'
+
+function getAlarmAudio(): HTMLAudioElement | null {
+  if (typeof window === 'undefined') return null
+  if (!bgAudio) {
+    bgAudio = new Audio()
+    bgAudio.preload = 'auto'
+  }
+  return bgAudio
+}
+
+function startMediaAudio() {
+  const audio = getAlarmAudio()
+  if (!audio) return
+  try {
+    const soundSrc = `/sounds/${soundType.value}.wav`
+    if (audio.src !== window.location.origin + soundSrc && !audio.src.endsWith(soundSrc)) {
+      audio.src = soundSrc
+    }
+    audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
+    // Native looping in HTML5 Audio plays seamlessly through OS mixer in background / minimized tabs!
+    audio.loop = (intervalSec.value === 0)
+    const p = audio.play()
+    if (p && typeof p.catch === 'function') {
+      p.catch(() => {})
+    }
+  } catch {}
+}
+
+function stopMediaAudio() {
+  if (bgAudio) {
+    try {
+      bgAudio.pause()
+      bgAudio.currentTime = 0
+    } catch {}
+  }
+}
+
+function startTitleFlash() {
+  if (typeof document === 'undefined') return
+  if (!originalDocTitle) originalDocTitle = document.title || 'UAA Airport Support'
+  if (titleFlashTimer) return
+
+  let toggle = false
+  titleFlashTimer = setInterval(() => {
+    const count = activeAlarmTickets.value.length
+    if (toggle) {
+      document.title = `🚨 (${count}) NEW TICKET - UAA Support`
+    } else {
+      document.title = `🔔 RINGING - Passenger Waiting!`
+    }
+    toggle = !toggle
+  }, 800)
+}
+
+function stopTitleFlash() {
+  if (titleFlashTimer) {
+    clearInterval(titleFlashTimer)
+    titleFlashTimer = null
+  }
+  if (typeof document !== 'undefined' && originalDocTitle) {
+    document.title = originalDocTitle
+  }
+}
+
+function initBackgroundWorker(onTick: () => void) {
+  if (typeof window === 'undefined' || typeof Worker === 'undefined' || bgWorker) return
+  try {
+    // Web Worker setInterval is NEVER throttled by Chromium in background or minimized tabs!
+    const workerCode = `
+      let timer = null;
+      self.onmessage = function(e) {
+        if (e.data.action === 'start') {
+          if (timer) clearInterval(timer);
+          const ms = Math.max(500, e.data.interval || 2000);
+          timer = setInterval(function() {
+            self.postMessage('tick');
+          }, ms);
+        } else if (e.data.action === 'stop') {
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+        }
+      };
+    `
+    const blob = new Blob([workerCode], { type: 'application/javascript' })
+    const workerUrl = URL.createObjectURL(blob)
+    bgWorker = new Worker(workerUrl)
+    bgWorker.onmessage = (e) => {
+      if (e.data === 'tick') {
+        onTick()
+      }
+    }
+    bgWorker.postMessage({ action: 'start', interval: 2000 })
+  } catch {}
+}
+
+function stopBackgroundWorker() {
+  if (bgWorker) {
+    try {
+      bgWorker.postMessage({ action: 'stop' })
+      bgWorker.terminate()
+    } catch {}
+    bgWorker = null
+  }
+}
 
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null
@@ -183,7 +293,7 @@ export function useAlarm() {
     const v = localStorage.getItem('uaa:alarm_volume')
     if (v && !isNaN(Number(v))) volume.value = Number(v)
 
-    // Unlock Web Audio context on user interactions with window
+    // Unlock Web Audio context and HTML5 media audio on user interactions with window
     const unlock = () => {
       const ctx = getAudioContext()
       if (ctx && ctx.state === 'suspended') {
@@ -192,6 +302,26 @@ export function useAlarm() {
         }).catch(() => {})
       } else if (ctx) {
         isAudioSuspended.value = false
+      }
+
+      // Pre-warm HTML5 audio element so browser grants background autoplay authorization
+      const audio = getAlarmAudio()
+      if (audio && !audio.src) {
+        audio.src = `/sounds/${soundType.value}.wav`
+        audio.volume = 0.001
+        const p = audio.play()
+        if (p && typeof p.then === 'function') {
+          p.then(() => {
+            audio.pause()
+            audio.currentTime = 0
+            audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
+          }).catch(() => {})
+        }
+      }
+
+      // Proactively request browser desktop notifications
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {})
       }
     }
     window.addEventListener('click', unlock, { passive: true })
@@ -292,12 +422,21 @@ export function useAlarm() {
     })
   }
 
-  // Desktop browser notification
+  // Desktop browser notification (with requireInteraction so it stays visible in Windows/Mac)
   function notifyBrowser(title: string, bodyText: string) {
     if (typeof window === 'undefined' || !('Notification' in window)) return
     try {
       if (Notification.permission === 'granted') {
-        new Notification(title, { body: bodyText, icon: '/favicon.ico' })
+        const notif = new Notification(title, {
+          body: bodyText,
+          icon: '/favicon.ico',
+          requireInteraction: true,
+          tag: 'uaa-passenger-alarm'
+        })
+        notif.onclick = () => {
+          window.focus()
+          notif.close()
+        }
       } else if (Notification.permission !== 'denied') {
         Notification.requestPermission()
       }
@@ -411,13 +550,22 @@ export function useAlarm() {
 
   function evaluateAlarmLoop() {
     if (isAlarming.value) {
-      if (!alarmTimer) {
-        // Play sound immediately
-        playTone(soundType.value, volume.value)
-        // Interval: 0 = continuous non-stop ringing (~800ms repeat)
-        const delayMs = intervalSec.value === 0 ? 800 : Math.max(1, intervalSec.value) * 1000
+      // 1. Start native HTML5 media audio loop (works seamlessly when tab is minimized or in background)
+      startMediaAudio()
+      startTitleFlash()
+      // 2. Play Web Audio tone for foreground responsiveness
+      playTone(soundType.value, volume.value)
+
+      notifyBrowser(
+        '🚨 Passenger Waiting! - UAA Support',
+        `${activeAlarmTickets.value.length} passenger enquiry waiting for staff response. Click to view.`
+      )
+
+      if (!alarmTimer && intervalSec.value > 0) {
+        const delayMs = Math.max(1, intervalSec.value) * 1000
         alarmTimer = setInterval(() => {
           if (isAlarming.value) {
+            startMediaAudio()
             playTone(soundType.value, volume.value)
           } else {
             stopAlarm()
@@ -430,6 +578,8 @@ export function useAlarm() {
   }
 
   function stopAlarm() {
+    stopMediaAudio()
+    stopTitleFlash()
     if (alarmTimer) {
       clearInterval(alarmTimer)
       alarmTimer = null
@@ -450,6 +600,13 @@ export function useAlarm() {
 
   function testSound(type?: AlarmSoundType) {
     const t = type || soundType.value
+    const audio = getAlarmAudio()
+    if (audio) {
+      audio.src = `/sounds/${t}.wav`
+      audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
+      audio.loop = false
+      audio.play().catch(() => {})
+    }
     playTone(t, volume.value)
   }
 
@@ -623,7 +780,16 @@ export function useAlarm() {
       try { sb.realtime.setAuth(token) } catch {}
     }
 
-    // 2. 2-second backup polling loop ensures alarms ring across all staff tabs even if background WebSockets sleep
+    // 2. Initialize un-throttled Web Worker background timer so checks and alarms run uninterrupted even if tab is minimized
+    initBackgroundWorker(() => {
+      checkUnrespondedTickets()
+      if (isAlarming.value && intervalSec.value > 0) {
+        startMediaAudio()
+        playTone(soundType.value, volume.value)
+      }
+    })
+
+    // Fallback standard interval
     if (!pollTimer) {
       pollTimer = setInterval(() => {
         checkUnrespondedTickets()
@@ -686,7 +852,7 @@ export function useAlarm() {
         }
         // Only sound alarm if the visitor has actually submitted the form AND ticket is unread!
         if (t && !t.claimed_by && t.status !== 'closed' && t.unread_by_staff === true && isFormFilled(t)) {
-          playTone(soundType.value, volume.value)
+          evaluateAlarmLoop()
         }
         await checkUnrespondedTickets()
       })
@@ -703,6 +869,7 @@ export function useAlarm() {
 
   function destroy() {
     stopAlarm()
+    stopBackgroundWorker()
     if (pollTimer) {
       clearInterval(pollTimer)
       pollTimer = null
