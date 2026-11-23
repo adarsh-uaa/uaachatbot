@@ -9,6 +9,7 @@ const lead = computed(() => auth.can('tickets.reassign'))
 // Form submission check & reply warning state
 const showUnfilledWarningModal = ref(false)
 const acknowledgedUnfilled = ref(false)
+const showClaimWarningModal = ref(false)
 
 const isFormSubmitted = computed(() => {
   if (!t.value) return false
@@ -23,6 +24,19 @@ const isFormSubmitted = computed(() => {
 
   return (hasRealEmail && hasRealName) || (hasPhone && hasRealName)
 })
+
+function handleClaim() {
+  if (!isFormSubmitted.value) {
+    showClaimWarningModal.value = true
+    return
+  }
+  confirmClaim()
+}
+
+function confirmClaim() {
+  showClaimWarningModal.value = false
+  act('claim_ticket', { p_ticket: id }, t.value?.status === 'bot' ? 'You took over this chat! Automated bot replies are now disabled.' : 'You claimed this ticket')
+}
 
 async function load() {
   // The moment ANY staff member opens this ticket, immediately silence alarm across all devices
@@ -161,10 +175,24 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
         <button
           v-if="auth.can('tickets.claim')"
           class="btn amber"
-          @click="act('claim_ticket', { p_ticket: id }, 'You took over this chat! Automated bot replies are now disabled.')"
+          @click="handleClaim"
         >
           ⚡ Take Over & Claim Chat
         </button>
+      </div>
+    </div>
+
+    <!-- Warning Banner when Contact Form is Not Submitted -->
+    <div v-if="!isFormSubmitted" class="card" style="background:#fffbeb;border:1px solid #fde68a;margin-bottom:1.25rem;padding:.85rem 1.25rem">
+      <div class="row" style="gap:.75rem;align-items:center">
+        <span style="font-size:1.4rem">⚠️</span>
+        <div>
+          <strong style="color:#92400e;font-size:1rem">Contact Form Not Submitted</strong>
+          <p class="sub" style="margin:0;color:#b45309;font-size:.84rem">
+            This passenger has not submitted their verified contact details yet (name, email, or phone are unverified).
+            Live replies will only reach them while their browser chat tab is currently active.
+          </p>
+        </div>
       </div>
     </div>
 
@@ -178,7 +206,7 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
               {{ t.status === 'bot' ? '🤖 Bot Chat' : t.status }}
             </span>
             <span v-if="!isFormSubmitted" class="chip" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a" title="Passenger has not submitted the contact form">
-              ⚠️ Form Not Filled
+              ⚠️ Form Not Submitted
             </span>
             <span v-else class="chip" style="background:#dcfce7;color:#166534;border:1px solid #bbf7d0">
               ✓ Form Data Submitted
@@ -208,7 +236,7 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
         <button
           v-if="(t.status === 'open' || t.status === 'bot') && auth.can('tickets.claim')"
           class="btn amber"
-          @click="act('claim_ticket', { p_ticket: id }, t.status === 'bot' ? 'You claimed this chat! Automated replies disabled.' : 'You claimed this ticket')"
+          @click="handleClaim"
         >
           {{ t.status === 'bot' ? '⚡ Take Over & Claim' : 'Claim ticket' }}
         </button>
@@ -340,6 +368,37 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
           </button>
           <button class="btn danger" :disabled="isDeleting" @click="deleteChat">
             {{ isDeleting ? 'Deleting…' : 'Yes, Delete Ticket' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Claim Warning Confirmation Modal -->
+    <div v-if="showClaimWarningModal" class="delete-modal-backdrop" @click="showClaimWarningModal = false">
+      <div class="delete-modal card" @click.stop style="max-width:480px;box-sizing:border-box">
+        <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:1rem">
+          <div class="del-modal-icon" style="background:#fef3c7;color:#d97706;flex-shrink:0">
+            <span style="font-size:1.3rem">⚠️</span>
+          </div>
+          <div style="flex:1 1 0%;min-width:0">
+            <h2 style="margin:0;font-size:1.15rem;color:#92400e;word-break:break-word">Passenger Form Not Submitted</h2>
+            <p class="sub" style="margin:0;font-size:.82rem;word-break:break-word">Ticket UAA-{{ t.ticket_no }} · {{ t.visitor_name || 'Anonymous' }}</p>
+          </div>
+        </div>
+        <p style="font-size:.9rem;line-height:1.5;margin-bottom:1.25rem;color:var(--ink);word-break:break-word;overflow-wrap:anywhere">
+          This passenger has <strong>not submitted their contact form</strong> yet. Verified contact details (name, email, or phone) are missing.
+        </p>
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.75rem 1rem;margin-bottom:1.5rem">
+          <p style="margin:0;font-size:.84rem;color:#92400e;line-height:1.45;word-break:break-word;overflow-wrap:anywhere">
+            ⚠️ <strong>Notice:</strong> Your live responses will only be visible while the passenger remains in their active browser chat session. They will <strong>not receive an email or SMS notification</strong>.
+          </p>
+        </div>
+        <div class="row" style="justify-content:flex-end;gap:.6rem;flex-wrap:wrap">
+          <button class="btn alt" @click="showClaimWarningModal = false">
+            Cancel
+          </button>
+          <button class="btn amber" @click="confirmClaim">
+            Yes, Claim Conversation
           </button>
         </div>
       </div>

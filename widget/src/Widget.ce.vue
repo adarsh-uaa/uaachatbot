@@ -279,14 +279,11 @@ function handlePillClick(rule) {
 }
 
 async function ask(text, rule) {
-  if (!botChatEnabled.value) {
-    return startForm(text)
-  }
   push('me', text)
   busy.value = true
 
   // Check client rule match first for instant, accurate reply
-  const matched = rule || match(text)
+  const matched = rule || (botChatEnabled.value ? match(text) : null)
   if (matched) {
     answer(matched)
     // Sync with backend
@@ -410,9 +407,6 @@ async function send() {
   if (mode.value === 'chat') {
     try { await rpc('widget_send', { p_token: token, p_body: text }); await poll() }
     catch (e) { error.value = e.message === 'closed' ? t.value.closed : e.message; input.value = text }
-  } else if (!botChatEnabled.value) {
-    // Bot chat is disabled: show form directly with the visitor's query prefilled!
-    startForm(text)
   } else if (mode.value === 'bot') {
     await ask(text)
   }
@@ -507,13 +501,8 @@ async function poll() {
   }
 }
 function setInitialMode() {
-  mode.value = botChatEnabled.value ? 'bot' : 'form'
+  mode.value = 'bot'
 }
-watch(botChatEnabled, (enabled) => {
-  if (!token && mode.value !== 'chat') {
-    mode.value = enabled ? 'bot' : 'form'
-  }
-}, { immediate: true })
 function startPolling() {
   stopPolling()
   timer = setInterval(poll, 4000)
@@ -553,7 +542,7 @@ onMounted(async () => {
   }
   try {
     cfg.value = await rpc('widget_config', { p_site_key: props.siteKey })
-    if (botChatEnabled.value && cfg.value?.texts?.greeting) {
+    if (cfg.value?.texts?.greeting) {
       msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
     }
     if (cfg.value?.theme?.defaultCountryCode) {
@@ -696,7 +685,7 @@ watch(open, v => {
           </div>
         </template>
       </div>
-      <footer v-if="(mode === 'chat' && live.status !== 'closed') || (mode === 'bot' && botChatEnabled)">
+      <footer v-if="mode !== 'form' && live.status !== 'closed'">
         <p v-if="error && mode !== 'form'" class="err">{{ error }}</p>
         <div class="send-bar">
           <input

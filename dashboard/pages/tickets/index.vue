@@ -132,7 +132,41 @@ async function executeDelete() {
   }
 }
 
-async function quickClaim(ticketId: string) {
+function isFormSubmitted(ticket: any): boolean {
+  if (!ticket) return false
+  if (ticket.form_submitted === true) return true
+  const email = String(ticket.visitor_email || '').trim().toLowerCase()
+  const name = String(ticket.visitor_name || '').trim()
+  const phone = String(ticket.visitor_phone || '').trim()
+
+  const hasRealEmail = email.length > 0 && !email.includes('@uaa.chat') && !email.includes('anonymous')
+  const hasRealName = name.length > 0 && !name.startsWith('Passenger #') && name !== 'Passenger' && name !== 'Visitor'
+  const hasPhone = phone.length > 0
+
+  return (hasRealEmail && hasRealName) || (hasPhone && hasRealName)
+}
+
+const claimWarningTarget = ref<any>(null)
+const showClaimWarningModal = ref(false)
+
+function handleQuickClaim(ticket: any) {
+  if (!isFormSubmitted(ticket)) {
+    claimWarningTarget.value = ticket
+    showClaimWarningModal.value = true
+    return
+  }
+  executeQuickClaim(ticket.id)
+}
+
+function confirmClaimWarning() {
+  if (!claimWarningTarget.value) return
+  const id = claimWarningTarget.value.id
+  showClaimWarningModal.value = false
+  claimWarningTarget.value = null
+  executeQuickClaim(id)
+}
+
+async function executeQuickClaim(ticketId: string) {
   const { error: err } = await sb.rpc('claim_ticket', { p_ticket: ticketId })
   if (err) {
     show(err.message, 'err')
@@ -236,7 +270,15 @@ async function quickClaim(ticketId: string) {
           </td>
           <td><span class="sub" style="font-size:.85rem">{{ t.sites?.name || '-' }}</span></td>
           <td>
-            <strong>{{ t.visitor_name || 'Anonymous Passenger' }}</strong>
+            <div class="row" style="gap:.4rem;align-items:center;flex-wrap:wrap">
+              <strong>{{ t.visitor_name || 'Anonymous Passenger' }}</strong>
+              <span v-if="!isFormSubmitted(t)" class="chip" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.7rem;padding:1px 6px" title="Passenger has not submitted the contact form yet">
+                ⚠️ Form Not Submitted
+              </span>
+              <span v-else class="chip" style="background:#dcfce7;color:#166534;border:1px solid #bbf7d0;font-size:.7rem;padding:1px 6px" title="Passenger submitted verified contact form">
+                ✓ Form Submitted
+              </span>
+            </div>
             <small v-if="t.visitor_email" class="sub" style="display:block;font-size:.78rem">{{ t.visitor_email }}</small>
             <small v-if="t.visitor_phone" style="display:block;font-size:.78rem;color:var(--teal)">📞 {{ t.visitor_phone }}</small>
           </td>
@@ -256,7 +298,7 @@ async function quickClaim(ticketId: string) {
                 v-if="(t.status === 'bot' || t.status === 'open') && auth.can('tickets.claim')"
                 class="btn sm amber"
                 style="padding:2px 7px;font-size:.72rem"
-                @click.stop="quickClaim(t.id)"
+                @click.stop="handleQuickClaim(t)"
                 title="Take over conversation and disable automated bot replies"
               >
                 ⚡ Claim
@@ -306,6 +348,37 @@ async function quickClaim(ticketId: string) {
         </button>
         <button class="btn danger" :disabled="isDeleting" @click="executeDelete">
           {{ isDeleting ? 'Deleting…' : `Yes, Delete ${targetDeleteCount} Chat${targetDeleteCount > 1 ? 's' : ''}` }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Claim Warning Modal for Unsubmitted Form -->
+  <div v-if="showClaimWarningModal && claimWarningTarget" class="delete-modal-backdrop" @click="showClaimWarningModal = false">
+    <div class="delete-modal card" @click.stop style="max-width:480px;box-sizing:border-box">
+      <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:1rem">
+        <div class="del-modal-icon" style="background:#fef3c7;color:#d97706;flex-shrink:0">
+          <span style="font-size:1.3rem">⚠️</span>
+        </div>
+        <div style="flex:1 1 0%;min-width:0">
+          <h2 style="margin:0;font-size:1.15rem;color:#92400e">Passenger Form Not Submitted</h2>
+          <p class="sub" style="margin:0;font-size:.82rem">Ticket UAA-{{ claimWarningTarget.ticket_no }} · {{ claimWarningTarget.visitor_name || 'Anonymous' }}</p>
+        </div>
+      </div>
+      <p style="font-size:.9rem;line-height:1.5;margin-bottom:1.25rem;color:var(--ink)">
+        This passenger has <strong>not submitted their contact information</strong> (name, email, or phone number).
+      </p>
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.75rem 1rem;margin-bottom:1.5rem">
+        <p style="margin:0;font-size:.84rem;color:#92400e;line-height:1.45">
+          ⚠️ <strong>Notice:</strong> Your live responses will only be delivered if the visitor still has their browser chat window open. If they have closed their browser tab, they will <strong>not receive an email or SMS notification</strong>.
+        </p>
+      </div>
+      <div class="row" style="justify-content:flex-end;gap:.6rem;flex-wrap:wrap">
+        <button class="btn alt" @click="showClaimWarningModal = false">
+          Cancel
+        </button>
+        <button class="btn amber" @click="confirmClaimWarning">
+          Yes, Claim Ticket
         </button>
       </div>
     </div>

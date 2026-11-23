@@ -89,20 +89,6 @@ begin
     select * into t from tickets where visitor_token = p_token::uuid;
   end if;
 
-  -- If bot chat is disabled and no existing ticket exists, immediately hand off to form without creating premature tickets
-  if not is_bot_on and t.id is null then
-    return jsonb_build_object(
-      'token', null,
-      'ticket_no', null,
-      'claimed', false,
-      'reply', null,
-      'link_url', null,
-      'button_label', null,
-      'handoff', true,
-      'status', 'open'
-    );
-  end if;
-
   if t.id is null then
     final_status := case when is_bot_on then 'bot'::ticket_status else 'open'::ticket_status end;
     insert into tickets(site_id, visitor_name, visitor_email, subject, status, form_submitted)
