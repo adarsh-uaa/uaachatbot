@@ -76,8 +76,8 @@ watch(() => auth.session.value, async (s) => {
     if (sb.realtime?.setAuth) {
       try { await sb.realtime.setAuth(s.access_token) } catch {}
     }
-    await staff.load()
-    alarm.start()
+    try { await staff.load() } catch {}
+    try { alarm.start() } catch (err) { console.error('Alarm start error:', err) }
     subscribeNewTickets()
   } else {
     alarm.destroy()
@@ -93,9 +93,9 @@ onMounted(async () => {
     if (sb.realtime?.setAuth) {
       try { await sb.realtime.setAuth(auth.session.value.access_token) } catch {}
     }
-    await staff.load()
+    try { await staff.load() } catch {}
     canNotify.value = 'Notification' in window && Notification.permission === 'granted'
-    alarm.start()
+    try { alarm.start() } catch (err) { console.error('Alarm start error:', err) }
     subscribeNewTickets()
   }
 })

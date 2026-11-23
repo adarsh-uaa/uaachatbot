@@ -33,6 +33,8 @@ let originalDocTitle = ''
 let sbChannel: any = null
 let localBc: BroadcastChannel | null = null
 let isPlayingAlarm = false
+const audioBuffers: Record<string, AudioBuffer> = {}
+let currentSourceNode: AudioBufferSourceNode | null = null
 
 const SHARED_ALARM_CHANNEL = 'staff-alarm-sync'
 
@@ -56,26 +58,91 @@ function getKeepAliveAudio(): HTMLAudioElement | null {
   return keepAliveAudio
 }
 
-// Single consolidated sound output function:
-// Plays the genuine WAV sound via HTML5 audio element.
-// Only falls back to Web Audio oscillator synthesis if audio.play() rejects.
-// Never plays both simultaneously.
-function playAlarmSound(continuous = false) {
-  const audio = getAlarmAudio()
-  if (!audio) {
-    playTone(soundType.value, volume.value)
-    return
-  }
+async function loadSoundBuffer(type: AlarmSoundType): Promise<AudioBuffer | null> {
+  if (typeof window === 'undefined') return null
+  if (audioBuffers[type]) return audioBuffers[type]
+  const ctx = getAudioContext()
+  if (!ctx) return null
   try {
-    const soundSrc = `/sounds/${soundType.value}.wav`
-    if (audio.src !== window.location.origin + soundSrc && !audio.src.endsWith(soundSrc)) {
-      audio.src = soundSrc
-    }
-    audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
-    audio.loop = continuous
+    const res = await fetch(`/sounds/${type}.wav`)
+    const arrayBuffer = await res.arrayBuffer()
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
+    audioBuffers[type] = audioBuffer
+    return audioBuffer
+  } catch {
+    return null
+  }
+}
 
-    if (continuous) {
-      if (audio.paused) {
+// Single consolidated sound output function:
+// 1. Primary: Pre-decoded Web Audio API buffer (AudioBufferSourceNode).
+//    Chromium NEVER blocks bufferSource.start(0) in background tabs if AudioContext is running!
+// 2. Fallback: HTML5 audio element (/sounds/*.wav)
+// 3. Fallback: Web Audio synthesizer oscillator (playTone)
+function playAlarmSound(continuous = false) {
+  const ctx = getAudioContext()
+  if (ctx) {
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {})
+    }
+    const buffer = audioBuffers[soundType.value]
+    if (buffer) {
+      if (continuous && currentSourceNode) {
+        // Continuous ringing is already looping seamlessly
+        return
+      }
+      try {
+        if (currentSourceNode) {
+          try { currentSourceNode.stop() } catch {}
+          currentSourceNode = null
+        }
+        const source = ctx.createBufferSource()
+        source.buffer = buffer
+        source.loop = continuous
+
+        const gainNode = ctx.createGain()
+        gainNode.gain.setValueAtTime(Math.max(0.1, Math.min(1.0, volume.value)), ctx.currentTime)
+        source.connect(gainNode)
+        gainNode.connect(ctx.destination)
+
+        source.start(0)
+        if (continuous) {
+          currentSourceNode = source
+        }
+        isPlayingAlarm = true
+        return
+      } catch {}
+    } else {
+      loadSoundBuffer(soundType.value).then((b) => {
+        if (b && isAlarming.value && !currentSourceNode) {
+          playAlarmSound(continuous)
+        }
+      })
+    }
+  }
+
+  // Fallback 1: HTML5 audio element
+  const audio = getAlarmAudio()
+  if (audio) {
+    try {
+      const soundSrc = `/sounds/${soundType.value}.wav`
+      if (audio.src !== window.location.origin + soundSrc && !audio.src.endsWith(soundSrc)) {
+        audio.src = soundSrc
+      }
+      audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
+      audio.loop = continuous
+
+      if (continuous) {
+        if (audio.paused) {
+          audio.currentTime = 0
+          const p = audio.play()
+          if (p && typeof p.catch === 'function') {
+            p.catch(() => {
+              playTone(soundType.value, volume.value)
+            })
+          }
+        }
+      } else {
         audio.currentTime = 0
         const p = audio.play()
         if (p && typeof p.catch === 'function') {
@@ -84,23 +151,23 @@ function playAlarmSound(continuous = false) {
           })
         }
       }
-    } else {
-      audio.currentTime = 0
-      const p = audio.play()
-      if (p && typeof p.catch === 'function') {
-        p.catch(() => {
-          playTone(soundType.value, volume.value)
-        })
-      }
-    }
-    isPlayingAlarm = true
-  } catch {
-    playTone(soundType.value, volume.value)
+      isPlayingAlarm = true
+      return
+    } catch {}
   }
+
+  // Fallback 2: Web Audio oscillator tone
+  playTone(soundType.value, volume.value)
 }
 
 function stopMediaAudio() {
   isPlayingAlarm = false
+  if (currentSourceNode) {
+    try {
+      currentSourceNode.stop()
+    } catch {}
+    currentSourceNode = null
+  }
   if (bgAudio) {
     try {
       bgAudio.pause()
@@ -162,14 +229,13 @@ function startAudioKeepAlive() {
 function setupSilentNodes(ctx: AudioContext) {
   if (silentKeepAliveGain) return
   try {
-    // Volume 0.00001 (-100dB, completely inaudible to human ear)
-    // but guarantees Chrome considers the AudioContext actively rendering audio frames!
+    // 20Hz infrasound (inaudible to human hearing, but non-zero frames to keep Chromium audio awake)
     silentKeepAliveGain = ctx.createGain()
-    silentKeepAliveGain.gain.setValueAtTime(0.00001, ctx.currentTime)
+    silentKeepAliveGain.gain.setValueAtTime(0.001, ctx.currentTime)
     silentKeepAliveGain.connect(ctx.destination)
 
     silentKeepAliveOsc = ctx.createOscillator()
-    silentKeepAliveOsc.frequency.setValueAtTime(440, ctx.currentTime)
+    silentKeepAliveOsc.frequency.setValueAtTime(20, ctx.currentTime)
     silentKeepAliveOsc.connect(silentKeepAliveGain)
     silentKeepAliveOsc.start()
     isAudioSuspended.value = false
@@ -366,12 +432,20 @@ async function playTone(type: AlarmSoundType, vol: number) {
 
 export function useAlarm() {
   const sb = useSb()
+  const auth = useAuth()
   const { show } = useToast()
 
-  // Unlock Web Audio context, start silent keep-alive, and pre-warm HTML5 audio
+  // Unlock Web Audio context, start silent keep-alive, pre-cache buffers and pre-warm HTML5 audio
   function unlock() {
     isAudioSuspended.value = false
     startAudioKeepAlive()
+
+    // Pre-cache all sounds in memory for instant background playback without network/file delay
+    loadSoundBuffer('tawk')
+    loadSoundBuffer('siren')
+    loadSoundBuffer('radar')
+    loadSoundBuffer('chime')
+    loadSoundBuffer('beep')
 
     // Pre-warm HTML5 alarm audio element
     const audio = getAlarmAudio()
@@ -694,6 +768,37 @@ export function useAlarm() {
 
   function testSound(type?: AlarmSoundType) {
     const t = type || soundType.value
+    const ctx = getAudioContext()
+    if (ctx) {
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+      const buffer = audioBuffers[t]
+      if (buffer) {
+        try {
+          const source = ctx.createBufferSource()
+          source.buffer = buffer
+          source.loop = false
+          const gainNode = ctx.createGain()
+          gainNode.gain.setValueAtTime(Math.max(0.1, Math.min(1.0, volume.value)), ctx.currentTime)
+          source.connect(gainNode)
+          gainNode.connect(ctx.destination)
+          source.start(0)
+          return
+        } catch {}
+      } else {
+        loadSoundBuffer(t).then(b => {
+          if (b && ctx) {
+            const source = ctx.createBufferSource()
+            source.buffer = b
+            source.loop = false
+            const gainNode = ctx.createGain()
+            gainNode.gain.setValueAtTime(Math.max(0.1, Math.min(1.0, volume.value)), ctx.currentTime)
+            source.connect(gainNode)
+            gainNode.connect(ctx.destination)
+            source.start(0)
+          }
+        })
+      }
+    }
     const audio = getAlarmAudio()
     if (audio) {
       audio.src = `/sounds/${t}.wav`
@@ -876,10 +981,19 @@ export function useAlarm() {
     checkUnrespondedTickets()
 
     // 1. Ensure token is set on Realtime socket for current user
-    const token = auth.session.value?.access_token
-    if (token && sb.realtime?.setAuth) {
-      try { sb.realtime.setAuth(token) } catch {}
-    }
+    try {
+      const token = auth.session.value?.access_token
+      if (token && sb.realtime?.setAuth) {
+        sb.realtime.setAuth(token).catch(() => {})
+      }
+    } catch {}
+
+    // Preload audio buffers into memory for instantaneous background Web Audio playback
+    loadSoundBuffer('tawk')
+    loadSoundBuffer('siren')
+    loadSoundBuffer('radar')
+    loadSoundBuffer('chime')
+    loadSoundBuffer('beep')
 
     // 2. Initialize un-throttled Web Worker background timer so checks and alarms run uninterrupted even if tab is minimized
     initBackgroundWorker(
