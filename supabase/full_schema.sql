@@ -513,8 +513,8 @@ begin
     raise exception 'Too many requests, please try again later';
   end if;
 
-  insert into tickets(site_id, visitor_name, visitor_email, visitor_phone, subject, status, form_submitted)
-    values (s.id, p_name, p_email, nullif(p_phone, ''), left(p_message, 100), 'open', true)
+  insert into tickets(site_id, visitor_name, visitor_email, visitor_phone, subject, status, form_submitted, unread_by_staff)
+    values (s.id, p_name, p_email, nullif(p_phone, ''), left(p_message, 100), 'open', true, true)
     returning * into t;
 
   insert into ticket_messages(ticket_id, sender, body) values (t.id, 'visitor', p_message);
@@ -570,6 +570,7 @@ begin
       when clean_msg <> '' and (t.subject is null or t.subject like 'Passenger #%') then left(clean_msg, 80)
       else t.subject
     end,
+    unread_by_staff = true,
     updated_at = now()
   where id = t.id;
 

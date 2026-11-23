@@ -352,13 +352,25 @@ export function useAlarm() {
       try {
         const resFallback = await sb
           .from('tickets')
-          .select('id, ticket_no, visitor_name, visitor_email, visitor_phone, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, theme)')
+          .select('id, ticket_no, visitor_name, visitor_email, visitor_phone, form_submitted, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at, sites(name, theme)')
           .neq('status', 'closed')
           .is('claimed_by', null)
           .eq('unread_by_staff', true)
           .order('updated_at', { ascending: false })
 
-        if (!resFallback.error && resFallback.data) list = resFallback.data
+        if (!resFallback.error && resFallback.data) {
+          list = resFallback.data
+        } else {
+          // Simplest fallback without relation join
+          const resSimple = await sb
+            .from('tickets')
+            .select('id, ticket_no, visitor_name, visitor_email, visitor_phone, form_submitted, subject, status, site_id, updated_at, created_at, claimed_by, unread_by_staff, first_response_at')
+            .neq('status', 'closed')
+            .is('claimed_by', null)
+            .eq('unread_by_staff', true)
+            .order('updated_at', { ascending: false })
+          if (!resSimple.error && resSimple.data) list = resSimple.data
+        }
       } catch {}
     }
 

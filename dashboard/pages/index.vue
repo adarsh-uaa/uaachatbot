@@ -4,6 +4,51 @@ const sb = useSb(), auth = useAuth(), alarm = useAlarm(), { show } = useToast()
 const days = ref(30), site = ref<string>(''), sites = ref<any[]>([]), s = ref<any>(null), error = ref('')
 const liveChats = ref<any[]>([])
 
+const claimWarningTarget = ref<any>(null)
+const showClaimWarningModal = ref(false)
+
+function isFormSubmitted(ticket: any): boolean {
+  if (!ticket) return false
+  if (ticket.form_submitted === true) return true
+  const email = String(ticket.visitor_email || '').trim().toLowerCase()
+  const name = String(ticket.visitor_name || '').trim()
+  const phone = String(ticket.visitor_phone || '').trim()
+
+  const hasRealEmail = email.length > 0 && !email.includes('@uaa.chat') && !email.includes('anonymous')
+  const hasRealName = name.length > 0 && !name.startsWith('Passenger #') && name !== 'Passenger' && name !== 'Visitor'
+  const hasPhone = phone.length > 0
+
+  return (hasRealEmail && hasRealName) || (hasPhone && hasRealName)
+}
+
+function handleTakeOver(ticket: any) {
+  if (!isFormSubmitted(ticket)) {
+    claimWarningTarget.value = ticket
+    showClaimWarningModal.value = true
+    return
+  }
+  executeTakeOver(ticket.id)
+}
+
+function confirmTakeOver() {
+  if (!claimWarningTarget.value) return
+  const id = claimWarningTarget.value.id
+  showClaimWarningModal.value = false
+  claimWarningTarget.value = null
+  executeTakeOver(id)
+}
+
+async function executeTakeOver(ticketId: string) {
+  const { error: err } = await sb.rpc('claim_ticket', { p_ticket: ticketId })
+  if (err) {
+    show(err.message, 'err')
+  } else {
+    show('Conversation claimed! Automated bot replies paused.', 'ok')
+    alarm.broadcastTicketClaimed(ticketId)
+    navigateTo('/tickets/' + ticketId)
+  }
+}
+
 async function loadStats() {
   const { data, error: e } = await sb.rpc('dashboard_stats', { p_days: days.value, p_site: site.value || null })
   if (e) error.value = e.message; else { error.value = ''; s.value = data }
@@ -41,17 +86,6 @@ onBeforeUnmount(() => {
 
 watch([days, site], load)
 const max = (a: any[], k: string) => Math.max(1, ...(a || []).map(x => x[k]))
-
-async function takeOverChat(ticketId: string) {
-  const { error: err } = await sb.rpc('claim_ticket', { p_ticket: ticketId })
-  if (err) {
-    show(err.message, 'err')
-  } else {
-    show('Conversation claimed! Automated bot replies paused.', 'ok')
-    alarm.broadcastTicketClaimed(ticketId)
-    navigateTo('/tickets/' + ticketId)
-  }
-}
 </script>
 <template>
   <div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:1.5rem">
@@ -135,7 +169,15 @@ async function takeOverChat(ticketId: string) {
               </td>
               <td><span class="sub" style="font-size:.85rem">{{ t.sites?.name || '-' }}</span></td>
               <td>
-                <strong>{{ t.visitor_name || 'Passenger' }}</strong>
+                <div class="row" style="gap:.4rem;align-items:center;flex-wrap:wrap">
+                  <strong>{{ t.visitor_name || 'Passenger' }}</strong>
+                  <span v-if="!isFormSubmitted(t)" class="chip" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.7rem;padding:1px 6px" title="Passenger has not submitted the contact form yet">
+                    ⚠️ Form Not Submitted
+                  </span>
+                  <span v-else class="chip" style="background:#dcfce7;color:#166534;border:1px solid #bbf7d0;font-size:.7rem;padding:1px 6px" title="Passenger submitted verified contact form">
+                    ✓ Form Submitted
+                  </span>
+                </div>
                 <small v-if="t.visitor_phone" style="display:block;font-size:.76rem;color:var(--teal)">📞 {{ t.visitor_phone }}</small>
               </td>
               <td style="max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
@@ -152,7 +194,7 @@ async function takeOverChat(ticketId: string) {
                   v-if="auth.can('tickets.claim')"
                   class="btn sm amber"
                   style="padding:3px 9px;font-size:.75rem;white-space:nowrap"
-                  @click.stop="takeOverChat(t.id)"
+                  @click.stop="handleTakeOver(t)"
                   title="Claim chat and stop automated bot responses"
                 >
                   ⚡ Take Over
@@ -215,4 +257,64 @@ async function takeOverChat(ticketId: string) {
       </div>
     </div>
   </template>
+
+  <!-- Claim Warning Modal for Unsubmitted Form on Dashboard -->
+  <div v-if="showClaimWarningModal && claimWarningTarget" class="delete-modal-backdrop" @click="showClaimWarningModal = false">
+    <div class="delete-modal card" @click.stop style="max-width:480px;box-sizing:border-box">
+      <div style="display:flex;gap:.75rem;align-items:center;margin-bottom:1rem">
+        <div class="del-modal-icon" style="background:#fef3c7;color:#d97706;flex-shrink:0">
+          <span style="font-size:1.3rem">⚠️</span>
+        </div>
+        <div style="flex:1 1 0%;min-width:0">
+          <h2 style="margin:0;font-size:1.15rem;color:#92400e">Passenger Form Not Submitted</h2>
+          <p class="sub" style="margin:0;font-size:.82rem">Ticket UAA-{{ claimWarningTarget.ticket_no }} · {{ claimWarningTarget.visitor_name || 'Anonymous' }}</p>
+        </div>
+      </div>
+      <p style="font-size:.9rem;line-height:1.5;margin-bottom:1.25rem;color:var(--ink)">
+        This passenger has <strong>not submitted their contact information</strong> (name, email, or phone number).
+      </p>
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.75rem 1rem;margin-bottom:1.5rem">
+        <p style="margin:0;font-size:.84rem;color:#92400e;line-height:1.45">
+          ⚠️ <strong>Notice:</strong> Your live responses will only be delivered if the visitor still has their browser chat window open. If they have closed their browser tab, they will <strong>not receive an email or SMS notification</strong>.
+        </p>
+      </div>
+      <div class="row" style="justify-content:flex-end;gap:.6rem;flex-wrap:wrap">
+        <button class="btn alt" @click="showClaimWarningModal = false">
+          Cancel
+        </button>
+        <button class="btn amber" @click="confirmTakeOver">
+          Yes, Take Over Chat
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
+
+<style scoped>
+.delete-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 13, 22, 0.6);
+  backdrop-filter: blur(2px);
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.delete-modal {
+  width: 100%;
+  max-width: 480px;
+  animation: modalIn .15s ease-out;
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.del-modal-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+</style>

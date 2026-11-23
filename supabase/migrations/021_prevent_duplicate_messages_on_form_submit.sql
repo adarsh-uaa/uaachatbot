@@ -36,6 +36,7 @@ begin
       when clean_msg <> '' and (t.subject is null or t.subject like 'Passenger #%') then left(clean_msg, 80)
       else t.subject
     end,
+    unread_by_staff = true,
     updated_at = now()
   where id = t.id;
 
@@ -188,4 +189,45 @@ begin
 end $$;
 
 grant execute on function widget_bot_chat(text, text, text) to anon, authenticated;
+
+-- 3. Update widget_create_ticket to mark form_submitted = true and unread_by_staff = true
+create or replace function widget_create_ticket(
+  p_site_key text,
+  p_name text,
+  p_email text,
+  p_message text,
+  p_phone text default null
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  s sites;
+  t tickets;
+begin
+  select * into s from sites where site_key = p_site_key and is_active;
+  if not found then raise exception 'unknown site'; end if;
+  if not _origin_ok(s.allowed_origins) then raise exception 'origin not allowed'; end if;
+
+  p_name := trim(coalesce(p_name, ''));
+  p_email := lower(trim(coalesce(p_email, '')));
+  p_phone := trim(coalesce(p_phone, ''));
+  p_message := trim(coalesce(p_message, ''));
+
+  if char_length(p_name) not between 1 and 80 then raise exception 'Please enter your name'; end if;
+  if p_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' or char_length(p_email) > 160 then raise exception 'Please enter a valid email'; end if;
+  if char_length(p_message) not between 1 and 4000 then raise exception 'Please enter a message'; end if;
+
+  if (select count(*) from tickets where site_id = s.id and visitor_email = p_email and created_at > now() - interval '1 hour') >= 15 then
+    raise exception 'Too many requests, please try again later';
+  end if;
+
+  insert into tickets(site_id, visitor_name, visitor_email, visitor_phone, subject, status, form_submitted, unread_by_staff)
+    values (s.id, p_name, p_email, nullif(p_phone, ''), left(p_message, 100), 'open', true, true)
+    returning * into t;
+
+  insert into ticket_messages(ticket_id, sender, body) values (t.id, 'visitor', p_message);
+
+  return jsonb_build_object('token', t.visitor_token, 'ticket_no', t.ticket_no);
+end $$;
+
+grant execute on function widget_create_ticket(text, text, text, text, text) to anon, authenticated;
 
