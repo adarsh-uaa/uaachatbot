@@ -24,6 +24,7 @@ let audioCtx: AudioContext | null = null
 let silentKeepAliveGain: GainNode | null = null
 let silentKeepAliveOsc: OscillatorNode | null = null
 let bgAudio: HTMLAudioElement | null = null
+let keepAliveAudio: HTMLAudioElement | null = null
 let bgWorker: Worker | null = null
 let alarmTimer: any = null
 let pollTimer: any = null
@@ -31,6 +32,7 @@ let titleFlashTimer: any = null
 let originalDocTitle = ''
 let sbChannel: any = null
 let localBc: BroadcastChannel | null = null
+let isPlayingAlarm = false
 
 const SHARED_ALARM_CHANNEL = 'staff-alarm-sync'
 
@@ -43,24 +45,62 @@ function getAlarmAudio(): HTMLAudioElement | null {
   return bgAudio
 }
 
-function startMediaAudio() {
+function getKeepAliveAudio(): HTMLAudioElement | null {
+  if (typeof window === 'undefined') return null
+  if (!keepAliveAudio) {
+    keepAliveAudio = new Audio('/sounds/silent.wav')
+    keepAliveAudio.loop = true
+    keepAliveAudio.volume = 0.01
+    keepAliveAudio.preload = 'auto'
+  }
+  return keepAliveAudio
+}
+
+// Single consolidated sound output function:
+// Plays the genuine WAV sound via HTML5 audio element.
+// Only falls back to Web Audio oscillator synthesis if audio.play() rejects.
+// Never plays both simultaneously.
+function playAlarmSound(continuous = false) {
   const audio = getAlarmAudio()
-  if (!audio) return
+  if (!audio) {
+    playTone(soundType.value, volume.value)
+    return
+  }
   try {
     const soundSrc = `/sounds/${soundType.value}.wav`
     if (audio.src !== window.location.origin + soundSrc && !audio.src.endsWith(soundSrc)) {
       audio.src = soundSrc
     }
     audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
-    audio.loop = (intervalSec.value === 0)
-    const p = audio.play()
-    if (p && typeof p.catch === 'function') {
-      p.catch(() => {})
+    audio.loop = continuous
+
+    if (continuous) {
+      if (audio.paused) {
+        audio.currentTime = 0
+        const p = audio.play()
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {
+            playTone(soundType.value, volume.value)
+          })
+        }
+      }
+    } else {
+      audio.currentTime = 0
+      const p = audio.play()
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          playTone(soundType.value, volume.value)
+        })
+      }
     }
-  } catch {}
+    isPlayingAlarm = true
+  } catch {
+    playTone(soundType.value, volume.value)
+  }
 }
 
 function stopMediaAudio() {
+  isPlayingAlarm = false
   if (bgAudio) {
     try {
       bgAudio.pause()
@@ -96,9 +136,17 @@ function stopTitleFlash() {
   }
 }
 
-// Keep-Alive: Continuous silent rendering pipeline prevents Chromium from ever suspending AudioContext in background tabs!
+// Keep-Alive: Continuous silent HTML5 audio loop + Web Audio rendering pipeline
+// prevents Chromium from ever suspending audio or throttling timers in background tabs!
 function startAudioKeepAlive() {
   try {
+    const ka = getKeepAliveAudio()
+    if (ka && ka.paused) {
+      ka.play().then(() => {
+        isAudioSuspended.value = false
+      }).catch(() => {})
+    }
+
     const ctx = getAudioContext()
     if (!ctx) return
     if (ctx.state === 'suspended') {
@@ -320,34 +368,16 @@ export function useAlarm() {
   const sb = useSb()
   const { show } = useToast()
 
-  // Unlock Web Audio context, start silent keep-alive, and warm HTML5 audio element
+  // Unlock Web Audio context, start silent keep-alive, and pre-warm HTML5 audio
   function unlock() {
-    const ctx = getAudioContext()
-    if (ctx) {
-      if (ctx.state === 'suspended') {
-        ctx.resume().then(() => {
-          isAudioSuspended.value = false
-          startAudioKeepAlive()
-        }).catch(() => {})
-      } else {
-        isAudioSuspended.value = false
-        startAudioKeepAlive()
-      }
-    }
+    isAudioSuspended.value = false
+    startAudioKeepAlive()
 
-    // Pre-warm HTML5 audio element so browser grants background autoplay authorization
+    // Pre-warm HTML5 alarm audio element
     const audio = getAlarmAudio()
     if (audio && !audio.src) {
       audio.src = `/sounds/${soundType.value}.wav`
-      audio.volume = 0.001
-      const p = audio.play()
-      if (p && typeof p.then === 'function') {
-        p.then(() => {
-          audio.pause()
-          audio.currentTime = 0
-          audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
-        }).catch(() => {})
-      }
+      audio.load()
     }
 
     // Proactively request browser desktop notifications
@@ -375,7 +405,6 @@ export function useAlarm() {
 
     window.addEventListener('click', unlock, { passive: true })
     window.addEventListener('keydown', unlock, { passive: true })
-    window.addEventListener('focus', unlock, { passive: true })
     window.addEventListener('pointerdown', unlock, { passive: true })
     window.addEventListener('touchstart', unlock, { passive: true })
 
@@ -599,33 +628,40 @@ export function useAlarm() {
 
   function evaluateAlarmLoop() {
     if (isAlarming.value) {
-      // 1. Play sound immediately on this tick
-      startMediaAudio()
       startTitleFlash()
-      // 2. Play Web Audio tone directly through active keep-alive destination
-      playTone(soundType.value, volume.value)
-
       notifyBrowser(
         '🚨 Passenger Waiting! - UAA Support',
         `${activeAlarmTickets.value.length} passenger enquiry waiting for staff response. Click to view.`
       )
 
-      // 3. Start un-throttled Web Worker alarm timer for continuous background ringing
-      const delayMs = intervalSec.value === 0 ? 850 : Math.max(1, intervalSec.value) * 1000
-      if (bgWorker) {
-        bgWorker.postMessage({ action: 'start_alarm', delay: delayMs })
-      }
+      if (intervalSec.value === 0) {
+        // Continuous non-stop ringing: Native HTML5 loop handles seamless playback
+        playAlarmSound(true)
+        if (bgWorker) bgWorker.postMessage({ action: 'stop_alarm' })
+        if (alarmTimer) {
+          clearInterval(alarmTimer)
+          alarmTimer = null
+        }
+      } else {
+        // Interval-based ringing (e.g. every 5s, 10s)
+        const delayMs = Math.max(1, intervalSec.value) * 1000
+        playAlarmSound(false)
 
-      // 4. Fallback standard timer for main thread
-      if (!alarmTimer) {
-        alarmTimer = setInterval(() => {
-          if (isAlarming.value) {
-            startMediaAudio()
-            playTone(soundType.value, volume.value)
-          } else {
-            stopAlarm()
+        if (bgWorker) {
+          bgWorker.postMessage({ action: 'start_alarm', delay: delayMs })
+          if (alarmTimer) {
+            clearInterval(alarmTimer)
+            alarmTimer = null
           }
-        }, delayMs)
+        } else if (!alarmTimer) {
+          alarmTimer = setInterval(() => {
+            if (isAlarming.value) {
+              playAlarmSound(false)
+            } else {
+              stopAlarm()
+            }
+          }, delayMs)
+        }
       }
     } else {
       stopAlarm()
@@ -663,9 +699,16 @@ export function useAlarm() {
       audio.src = `/sounds/${t}.wav`
       audio.volume = Math.max(0.1, Math.min(1.0, volume.value))
       audio.loop = false
-      audio.play().catch(() => {})
+      audio.currentTime = 0
+      const p = audio.play()
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          playTone(t, volume.value)
+        })
+      }
+    } else {
+      playTone(t, volume.value)
     }
-    playTone(t, volume.value)
   }
 
   // Global toggle (all sites together)
@@ -844,9 +887,8 @@ export function useAlarm() {
         checkUnrespondedTickets()
       },
       () => {
-        if (isAlarming.value) {
-          startMediaAudio()
-          playTone(soundType.value, volume.value)
+        if (isAlarming.value && intervalSec.value > 0) {
+          playAlarmSound(false)
         }
       }
     )
@@ -892,7 +934,7 @@ export function useAlarm() {
         if (msg && msg.sender === 'visitor') {
           await checkUnrespondedTickets()
           if (activeAlarmTickets.value.length > 0) {
-            playTone(soundType.value, volume.value)
+            playAlarmSound(false)
             notifyBrowser('UAA Airport Support', `New message: ${msg.body?.slice(0, 75) || 'Passenger replied'}`)
             show(`💬 Passenger messaged: "${msg.body?.slice(0, 50)}${msg.body?.length > 50 ? '…' : ''}"`, 'info')
           }
@@ -918,7 +960,6 @@ export function useAlarm() {
           if (!exists) {
             unrespondedTickets.value = [t, ...unrespondedTickets.value]
           }
-          evaluateAlarmLoop()
         }
         await checkUnrespondedTickets()
       })

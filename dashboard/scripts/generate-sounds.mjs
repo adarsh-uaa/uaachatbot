@@ -203,11 +203,20 @@ function generateBeep() {
   return createWavBuffer(samples);
 }
 
+// 6. Silent Keep-Alive Stream (0.5s of absolute zero samples)
+function generateSilent() {
+  const totalDuration = 0.5;
+  const numSamples = Math.floor(SAMPLE_RATE * totalDuration);
+  const samples = new Float32Array(numSamples);
+  return createWavBuffer(samples);
+}
+
 fs.writeFileSync(path.join(outDir, 'tawk.wav'), generateTawk());
 fs.writeFileSync(path.join(outDir, 'siren.wav'), generateSiren());
 fs.writeFileSync(path.join(outDir, 'radar.wav'), generateRadar());
 fs.writeFileSync(path.join(outDir, 'chime.wav'), generateChime());
 fs.writeFileSync(path.join(outDir, 'beep.wav'), generateBeep());
+fs.writeFileSync(path.join(outDir, 'silent.wav'), generateSilent());
 
 console.log('Successfully generated alarm WAV sounds in', outDir);
 

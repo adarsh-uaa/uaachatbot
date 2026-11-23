@@ -28,14 +28,6 @@ const nav = computed(() => [
   { to: '/preview', label: 'Widget preview', icon: 'M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z', ok: auth.can('sites.manage') }
 ].filter(n => n.ok))
 
-function beep() {
-  try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-    const o = ctx.createOscillator(), g = ctx.createGain()
-    o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.value = 0.08
-    o.start(); o.stop(ctx.currentTime + 0.18)
-  } catch {}
-}
 const canNotify = ref(false)
 async function enableNotify() {
   if ('Notification' in window) { await Notification.requestPermission(); canNotify.value = Notification.permission === 'granted' }
@@ -62,7 +54,6 @@ function subscribeNewTickets() {
       // Only notify if passenger actually filled out the form and it's unclaimed
       const isFilled = t && (t.form_submitted === true || (t.visitor_email && !t.visitor_email.includes('@uaa.chat')))
       if (isFilled && !t.claimed_by && t.status !== 'closed') {
-        beep()
         show(`New ticket UAA-${t.ticket_no}: ${t.subject || 'Assistance requested'}`, 'info')
         if (canNotify.value) new Notification('New support ticket', { body: t.subject || 'Passenger submitted assistance form' })
       }
@@ -414,6 +405,19 @@ onBeforeUnmount(() => {
                   >
                   <span class="switch-slider" />
                 </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Reliable Background Audio Tip for Chrome / Edge -->
+          <div class="settings-section-card" style="background:rgba(59,130,246,0.06);border:1px dashed #3b82f6;padding:.85rem">
+            <div class="row" style="gap:.6rem;align-items:flex-start">
+              <span style="font-size:1.2rem">💡</span>
+              <div>
+                <strong style="font-size:.85rem;color:#1e40af">Reliable Background Sound in Chrome / Edge:</strong>
+                <p style="margin:.25rem 0 0 0;font-size:.8rem;color:#1d4ed8;line-height:1.4">
+                  To ensure alarms ring immediately even when this window is minimized, click the <strong>🔒 Tune / Lock icon</strong> on the left side of the address bar &rarr; <strong>Site settings</strong> &rarr; find <strong>Sound</strong> &rarr; change it to <strong>Allow</strong>.
+                </p>
               </div>
             </div>
           </div>
