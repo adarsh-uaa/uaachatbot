@@ -5,7 +5,7 @@ const rows = ref<any[]>([]), tab = ref('active'), q = ref(''), site = ref(''), e
 // Multi-select & Bulk Delete state
 const canDelete = computed(() => {
   const r = auth.profile.value?.role
-  return r === 'admin' || r === 'manager'
+  return r === 'admin' || r === 'developer' || r === 'manager'
 })
 const selectedIds = ref<string[]>([])
 const showDeleteModal = ref(false)
@@ -93,7 +93,7 @@ function clearSelection() {
 
 function confirmSingleDelete(ticket: any) {
   if (!canDelete.value) {
-    show('Only managers and admins can delete tickets.', 'err')
+    show('Only managers and developers can delete tickets.', 'err')
     return
   }
   singleDeleteTarget.value = ticket
@@ -104,7 +104,7 @@ const targetDeleteCount = computed(() => singleDeleteTarget.value ? 1 : selected
 
 async function executeDelete() {
   if (!canDelete.value) {
-    show('Only managers and admins can delete tickets.', 'err')
+    show('Only managers and developers can delete tickets.', 'err')
     return
   }
   const ids = singleDeleteTarget.value ? [singleDeleteTarget.value.id] : [...selectedIds.value]

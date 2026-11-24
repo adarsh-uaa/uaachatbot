@@ -103,12 +103,12 @@ const confirmDeleteModal = ref(false)
 const isDeleting = ref(false)
 const canDelete = computed(() => {
   const r = auth.profile.value?.role
-  return r === 'admin' || r === 'manager'
+  return r === 'admin' || r === 'developer' || r === 'manager'
 })
 
 async function deleteChat() {
   if (!canDelete.value) {
-    show('Only managers and admins can delete conversations.', 'err')
+    show('Only managers and developers can delete conversations.', 'err')
     return
   }
   isDeleting.value = true

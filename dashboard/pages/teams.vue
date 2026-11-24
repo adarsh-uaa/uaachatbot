@@ -9,15 +9,15 @@ const { show } = useToast()
 const activeTab = ref<'members' | 'roles'>('members')
 const canManage = computed(() => {
   const r = auth.profile.value?.role
-  return r === 'admin' || auth.can('users.manage')
+  return r === 'admin' || r === 'developer' || auth.can('users.manage')
 })
 const canViewReal = computed(() => {
   const r = auth.profile.value?.role
-  return r === 'admin' || r === 'manager' || r === 'teamlead' || auth.can('users.view_real') || auth.can('users.manage')
+  return r === 'admin' || r === 'developer' || r === 'manager' || r === 'teamlead' || auth.can('users.view_real') || auth.can('users.manage')
 })
 const canDeleteUser = computed(() => {
   const r = auth.profile.value?.role
-  return r === 'admin' || r === 'manager'
+  return r === 'admin' || r === 'developer' || r === 'manager'
 })
 
 const users = ref<any[]>([])
@@ -26,7 +26,9 @@ const rolePerms = ref<any[]>([])
 const overrides = ref<any[]>([])
 const ticketStats = ref<Record<string, number>>({})
 const sel = ref<any>(null)
-const roles = ['admin', 'manager', 'teamlead', 'employee']
+const roles = ['developer', 'manager', 'teamlead', 'employee']
+
+const formatRole = (r: string) => r === 'admin' ? 'developer' : r
 
 // Filters
 const search = ref('')
@@ -58,7 +60,11 @@ async function load() {
     sb.from('tickets').select('claimed_by, status').neq('status', 'closed')
   ])
 
-  users.value = (uRes.data || []).map((u: any) => ({ ...u }))
+  users.value = (uRes.data || []).map((u: any) => ({
+    ...u,
+    pseudo_name: u.pseudo_name?.toLowerCase() === 'admin' ? 'developer' : u.pseudo_name,
+    role: u.role === 'admin' ? 'developer' : u.role
+  }))
   perms.value = pRes.data || []
   rolePerms.value = rpRes.data || []
   overrides.value = upRes.data || []
@@ -118,12 +124,13 @@ async function submitAddUser() {
   addingUser.value = true
   try {
     // 1. Call admin_create_user RPC
+    const targetRole = userForm.role === 'developer' ? 'admin' : userForm.role
     const rpcRes = await sb.rpc('admin_create_user', {
       p_email: userForm.email,
       p_password: userForm.password,
       p_real_name: userForm.real_name,
       p_pseudo_name: userForm.pseudo_name,
-      p_role: userForm.role,
+      p_role: targetRole,
       p_team_id: null,
       p_email_confirm: userForm.email_confirm
     })
@@ -140,7 +147,7 @@ async function submitAddUser() {
             password: userForm.password,
             real_name: userForm.real_name,
             pseudo_name: userForm.pseudo_name,
-            role: userForm.role,
+            role: targetRole,
             email_confirm: userForm.email_confirm
           }
         })
@@ -161,9 +168,10 @@ async function submitAddUser() {
 
 async function saveUser(u: any) {
   if (!canManage.value) return
+  const saveRole = u.role === 'developer' ? 'admin' : u.role
   const payload: any = {
     pseudo_name: u.pseudo_name,
-    role: u.role,
+    role: saveRole,
     is_active: u.is_active
   }
   if (canViewReal.value && u.real_name) {
@@ -179,11 +187,15 @@ async function saveUser(u: any) {
 }
 
 // Role and Permission overrides
-const roleHas = (r: string, p: string) => rolePerms.value.some(x => x.role === r && x.permission === p)
+const roleHas = (r: string, p: string) => {
+  const targetRole = r === 'developer' ? 'admin' : r
+  return rolePerms.value.some(x => (x.role === targetRole || x.role === r) && x.permission === p)
+}
 async function toggleRole(r: string, p: string) {
   if (!canManage.value) return
-  if (roleHas(r, p)) await sb.from('role_permissions').delete().eq('role', r).eq('permission', p)
-  else await sb.from('role_permissions').insert({ role: r, permission: p })
+  const targetRole = r === 'developer' ? 'admin' : r
+  if (roleHas(r, p)) await sb.from('role_permissions').delete().eq('role', targetRole).eq('permission', p)
+  else await sb.from('role_permissions').insert({ role: targetRole, permission: p })
   await load()
 }
 
@@ -282,7 +294,7 @@ async function executeDeleteUser() {
       <div>
         <h1 style="margin:0 0 .25rem">Team Members & Roles</h1>
         <p class="sub" style="margin:0">
-          Manage your support staff, assign access roles (Admin, Manager, Team Lead, Employee), and configure permissions. Visitors only see public pseudo names.
+          Manage your support staff, assign access roles (Developer, Manager, Team Lead, Employee), and configure permissions. Visitors only see public pseudo names.
         </p>
       </div>
       <div v-if="canManage">
@@ -303,8 +315,8 @@ async function executeDeleteUser() {
         <b>{{ users.filter(u => u.is_active).length }}</b>
       </div>
       <div class="card stat amber">
-        <small class="sub">Administrators</small>
-        <b>{{ users.filter(u => u.role === 'admin').length }}</b>
+        <small class="sub">Developers</small>
+        <b>{{ users.filter(u => u.role === 'developer' || u.role === 'admin').length }}</b>
       </div>
       <div class="card stat">
         <small class="sub">Tickets in Progress</small>
@@ -480,9 +492,9 @@ async function executeDeleteUser() {
 
         <div class="grid g4" style="margin-bottom:1.5rem">
           <div class="card" style="background:#f8fafc;border-top:3px solid #0f172a">
-            <h3 style="margin:0 0 .3rem">admin</h3>
+            <h3 style="margin:0 0 .3rem">developer</h3>
             <p class="sub" style="font-size:.84rem;margin:0">
-              Full administrative control. Can manage websites, bot rules, canned replies, users, and all tickets.
+              Full developer & administrative control. Can manage websites, bot rules, canned replies, users, and all tickets.
             </p>
           </div>
           <div class="card" style="background:#f8fafc;border-top:3px solid #2563eb">
@@ -526,7 +538,7 @@ async function executeDeleteUser() {
                 <input
                   type="checkbox"
                   :checked="roleHas(r, p.key)"
-                  :disabled="!canManage || r === 'admin'"
+                  :disabled="!canManage || r === 'admin' || r === 'developer'"
                   :aria-label="`${r} ${p.key}`"
                   style="width:auto;cursor:pointer"
                   @change="toggleRole(r, p.key)"

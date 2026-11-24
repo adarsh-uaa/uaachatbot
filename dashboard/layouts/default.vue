@@ -34,7 +34,8 @@ async function enableNotify() {
 }
 
 const initials = computed(() => {
-  const p = auth.profile.value?.pseudo_name || auth.profile.value?.real_name || 'U'
+  let p = auth.profile.value?.pseudo_name || auth.profile.value?.real_name || 'U'
+  if (p.toLowerCase() === 'admin') p = 'developer'
   return p.substring(0, 2).toUpperCase()
 })
 
@@ -129,7 +130,7 @@ onBeforeUnmount(() => {
         >
           {{ isAlarming ? '🚨' : !globalAlarmEnabled ? '🔕' : '🔔' }}
         </button>
-        <div v-if="auth.profile.value" class="mobile-avatar" :title="auth.profile.value.pseudo_name">
+        <div v-if="auth.profile.value" class="mobile-avatar" :title="auth.profile.value.pseudo_name?.toLowerCase() === 'admin' ? 'developer' : auth.profile.value.pseudo_name">
           {{ initials }}
         </div>
       </div>
@@ -192,10 +193,10 @@ onBeforeUnmount(() => {
           </div>
           <div style="min-width:0;overflow:hidden">
             <strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-              {{ auth.profile.value.pseudo_name }}
+              {{ auth.profile.value.pseudo_name?.toLowerCase() === 'admin' ? 'developer' : auth.profile.value.pseudo_name }}
             </strong>
             <span style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.75rem">
-              {{ auth.profile.value.role }}<template v-if="auth.profile.value.real_name"> · {{ auth.profile.value.real_name }}</template>
+              {{ auth.profile.value.role === 'admin' ? 'developer' : auth.profile.value.role }}<template v-if="auth.profile.value.real_name"> · {{ auth.profile.value.real_name?.toLowerCase() === 'admin' ? 'developer' : auth.profile.value.real_name }}</template>
             </span>
           </div>
         </div>

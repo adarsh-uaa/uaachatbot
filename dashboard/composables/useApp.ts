@@ -52,7 +52,7 @@ export const useStaff = () => {
     const m: Record<string, any> = {}
     ;(data || []).forEach((s: any) => (m[s.id] = { ...s }))
     const role = profile.value?.role
-    const canSeeReal = role === 'admin' || role === 'manager' || role === 'teamlead' || can('users.view_real') || can('users.manage')
+    const canSeeReal = role === 'admin' || role === 'developer' || role === 'manager' || role === 'teamlead' || can('users.view_real') || can('users.manage')
     if (canSeeReal) {
       const r = await sb.from('profiles').select('id,real_name,team_id')
       ;(r.data || []).forEach((p: any) => {
@@ -67,7 +67,9 @@ export const useStaff = () => {
   const label = (id?: string | null) => {
     const s = id ? map.value[id] : null
     if (!s) return '—'
-    return s.real_name ? `${s.pseudo_name} (${s.real_name})` : s.pseudo_name
+    const pseudo = (s.pseudo_name?.toLowerCase() === 'admin' ? 'developer' : s.pseudo_name)
+    const real = (s.real_name?.toLowerCase() === 'admin' ? 'developer' : s.real_name)
+    return real ? `${pseudo} (${real})` : pseudo
   }
   const list = computed(() => Object.values(map.value).filter((s: any) => s.is_active))
   return { map, load, label, list }

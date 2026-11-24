@@ -15,7 +15,7 @@ create extension if not exists pg_net;
 -- ----------------------------------------------------------------------------
 do $$ begin
   if not exists (select 1 from pg_type where typname = 'app_role') then
-    create type app_role as enum ('admin', 'manager', 'teamlead', 'employee');
+    create type app_role as enum ('admin', 'developer', 'manager', 'teamlead', 'employee');
   end if;
   if not exists (select 1 from pg_type where typname = 'ticket_status') then
     create type ticket_status as enum ('bot', 'open', 'claimed', 'closed');
@@ -226,7 +226,7 @@ language sql stable security definer set search_path = public as $$
     select 1 from profiles pr
     where pr.id = auth.uid()
       and (
-        pr.role in ('admin', 'manager', 'teamlead')
+        pr.role::text in ('admin', 'developer', 'manager', 'teamlead')
         or exists (
           select 1 from role_permissions rp
           where rp.role = pr.role and rp.permission in ('users.view_real', 'users.manage')
@@ -246,7 +246,7 @@ language sql stable security definer set search_path = public as $$
     select 1 from profiles pr
     where pr.id = auth.uid()
       and pr.is_active = true
-      and pr.role in ('admin', 'manager')
+      and pr.role::text in ('admin', 'developer', 'manager')
   );
 $$;
 
@@ -932,7 +932,7 @@ create or replace function delete_ticket(p_ticket uuid) returns boolean
 language plpgsql security definer set search_path = public as $$
 begin
   if not can_delete_tickets() then
-    raise exception 'Unauthorized: Only managers and admins can delete tickets.' using errcode = '42501';
+    raise exception 'Unauthorized: Only managers and developers can delete tickets.' using errcode = '42501';
   end if;
   delete from tickets where id = p_ticket;
   return found;
@@ -944,7 +944,7 @@ language plpgsql security definer set search_path = public as $$
 declare deleted_count integer;
 begin
   if not can_delete_tickets() then
-    raise exception 'Unauthorized: Only managers and admins can delete tickets.' using errcode = '42501';
+    raise exception 'Unauthorized: Only managers and developers can delete tickets.' using errcode = '42501';
   end if;
   delete from tickets where id = any(p_tickets);
   get diagnostics deleted_count = row_count;
@@ -1027,8 +1027,8 @@ declare
   target_user auth.users%rowtype;
 begin
   select role::text into caller_role from profiles where id = caller_id;
-  if caller_role not in ('admin', 'manager') then
-    raise exception 'Unauthorized: Only managers and admins can delete users.' using errcode = '42501';
+  if caller_role not in ('admin', 'developer', 'manager') then
+    raise exception 'Unauthorized: Only managers and developers can delete users.' using errcode = '42501';
   end if;
 
   if p_user_id = caller_id then raise exception 'You cannot delete your own account.'; end if;
