@@ -289,12 +289,12 @@ onBeforeUnmount(() => {
     <!-- 🚨 Escalation Alarm & Sound Settings Modal (Global + Per-Site Controls) -->
     <div v-if="alarm.isSettingsOpen.value" class="alarm-modal-backdrop" @click="alarm.isSettingsOpen.value = false">
       <div class="alarm-modal card" @click.stop>
-        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:1.25rem;border-bottom:1px solid var(--line-subtle);padding-bottom:.85rem">
-          <div class="row" style="gap:.6rem;align-items:center">
-            <span style="font-size:1.5rem">🚨</span>
-            <div>
-              <h2 style="margin:0;font-size:1.2rem">Escalation Alarm Settings</h2>
-              <p class="sub" style="margin:0;font-size:.82rem">Continuous alert when a passenger escalates from bot to team.</p>
+        <div class="alarm-modal-header">
+          <div class="alarm-modal-title">
+            <span style="font-size:1.4rem;flex-shrink:0">🚨</span>
+            <div style="min-width:0;flex:1">
+              <h2 style="margin:0;font-size:1.15rem;line-height:1.2">Escalation Alarm Settings</h2>
+              <p class="sub" style="margin:.15rem 0 0 0;font-size:.82rem;line-height:1.3">Continuous alert when a passenger escalates from bot to team.</p>
             </div>
           </div>
           <button class="close-modal-btn" aria-label="Close" @click="alarm.isSettingsOpen.value = false">✕</button>
@@ -303,14 +303,14 @@ onBeforeUnmount(() => {
         <div class="alarm-settings-body">
           <!-- 1. All Sites Together: Master Toggle -->
           <div class="settings-section-card">
-            <div class="row" style="justify-content:space-between;align-items:center">
-              <div>
-                <strong style="font-size:1rem;display:block">Global Escalation Alarm</strong>
-                <p class="sub" style="margin:.2rem 0 0 0;font-size:.82rem">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem">
+              <div style="min-width:0;flex:1">
+                <strong style="font-size:.95rem;display:block">Global Escalation Alarm</strong>
+                <p class="sub" style="margin:.2rem 0 0 0;font-size:.82rem;line-height:1.4">
                   Master switch for all sites together. When active, alarm rings continuously until tickets are claimed or responded to.
                 </p>
               </div>
-              <label class="switch-control">
+              <label class="switch-control" style="flex-shrink:0">
                 <input
                   type="checkbox"
                   :checked="alarm.globalEnabled.value"
@@ -324,21 +324,21 @@ onBeforeUnmount(() => {
           <!-- 2. Sound Tone, Volume & Repeat Timing -->
           <div class="settings-section-card">
             <h3 style="font-size:.95rem;margin:0 0 .75rem 0">Audio Alert & Ringtone</h3>
-            <div class="grid g2" style="gap:1rem;margin-bottom:1rem">
-              <div>
+            <div class="alarm-controls-grid">
+              <div style="min-width:0">
                 <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.35rem">Alarm Sound Profile</label>
-                <select v-model="alarm.soundType.value" @change="alarm.savePreferences()">
-                  <option value="tawk">🔔 Tawk.to Chat Ring (Loud Telephone Warble)</option>
-                  <option value="siren">🚨 Loud Emergency Siren (Alternating dual-tone)</option>
+                <select v-model="alarm.soundType.value" @change="alarm.savePreferences()" class="alarm-select">
+                  <option value="tawk">🔔 Tawk.to Chat Ring (Warble)</option>
+                  <option value="siren">🚨 Loud Emergency Siren</option>
                   <option value="radar">📡 High Sonar / Radar Sweep</option>
-                  <option value="chime">🔔 Loud Boarding Chime (3-tone melodic)</option>
+                  <option value="chime">🔔 Airport Boarding Chime</option>
                   <option value="beep">⚡ Double Crisp Beep</option>
                 </select>
               </div>
-              <div>
+              <div style="min-width:0">
                 <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.35rem">Repeat Frequency / Mode</label>
-                <select v-model.number="alarm.intervalSec.value" @change="alarm.savePreferences()">
-                  <option :value="0">⚡ Continuous Alarm (Non-stop non-stop loop)</option>
+                <select v-model.number="alarm.intervalSec.value" @change="alarm.savePreferences()" class="alarm-select">
+                  <option :value="0">⚡ Continuous Alarm (Non-stop)</option>
                   <option :value="2">Every 2 seconds (Rapid loop)</option>
                   <option :value="4">Every 4 seconds (Urgent)</option>
                   <option :value="6">Every 6 seconds (Standard)</option>
@@ -348,9 +348,9 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <div class="row" style="justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
-              <div class="row" style="gap:.6rem;align-items:center;flex:1;min-width:200px">
-                <span style="font-size:.82rem;font-weight:600">Volume</span>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-top:.75rem">
+              <div style="display:flex;align-items:center;gap:.6rem;flex:1;min-width:180px">
+                <span style="font-size:.82rem;font-weight:600;flex-shrink:0">Volume</span>
                 <input
                   type="range"
                   min="0.1"
@@ -358,11 +358,11 @@ onBeforeUnmount(() => {
                   step="0.05"
                   v-model.number="alarm.volume.value"
                   @change="alarm.savePreferences()"
-                  style="flex:1"
+                  style="flex:1;min-width:60px"
                 >
-                <span style="font-size:.8rem;font-family:monospace">{{ Math.round(alarm.volume.value * 100) }}%</span>
+                <span style="font-size:.8rem;font-family:monospace;flex-shrink:0">{{ Math.round(alarm.volume.value * 100) }}%</span>
               </div>
-              <button class="btn alt sm" @click="alarm.testSound()" style="white-space:nowrap">
+              <button class="btn alt sm" @click="alarm.testSound()" style="white-space:nowrap;flex-shrink:0">
                 ▶ Test Sound
               </button>
             </div>
@@ -370,12 +370,12 @@ onBeforeUnmount(() => {
 
           <!-- 3. Individual Site Controls (Per-Site Depending) -->
           <div class="settings-section-card">
-            <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:.75rem">
-              <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap">
+              <div style="min-width:0;flex:1 1 180px">
                 <h3 style="font-size:.95rem;margin:0">Individual Site Controls</h3>
-                <p class="sub" style="margin:0;font-size:.8rem">Enable or silence the escalation alarm for specific airport properties.</p>
+                <p class="sub" style="margin:0;font-size:.8rem;line-height:1.35">Enable or silence the escalation alarm for specific airport properties.</p>
               </div>
-              <div class="row" style="gap:.4rem">
+              <div style="display:flex;gap:.4rem;flex-shrink:0">
                 <button class="btn alt sm" style="font-size:.75rem;padding:3px 8px" @click="alarm.setAllSites(true)">
                   Turn All ON
                 </button>
@@ -394,11 +394,11 @@ onBeforeUnmount(() => {
                 :key="site.id"
                 class="site-alarm-row"
               >
-                <div class="row" style="gap:.5rem;align-items:center">
-                  <span style="font-size:.9rem">{{ site.escalation_alarm_enabled ? '🔔' : '🔕' }}</span>
-                  <strong>{{ site.name }}</strong>
+                <div style="display:flex;gap:.5rem;align-items:center;min-width:0;flex:1">
+                  <span style="font-size:.9rem;flex-shrink:0">{{ site.escalation_alarm_enabled ? '🔔' : '🔕' }}</span>
+                  <strong style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.88rem">{{ site.name }}</strong>
                 </div>
-                <label class="switch-control sm">
+                <label class="switch-control sm" style="flex-shrink:0">
                   <input
                     type="checkbox"
                     :checked="site.escalation_alarm_enabled"
@@ -411,12 +411,12 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- 4. Reliable Background Audio Tip for Chrome / Edge -->
-          <div class="settings-section-card" style="background:rgba(59,130,246,0.06);border:1px dashed #3b82f6;padding:.85rem">
-            <div class="row" style="gap:.6rem;align-items:flex-start">
-              <span style="font-size:1.2rem">💡</span>
-              <div>
-                <strong style="font-size:.85rem;color:#1e40af">Reliable Background Sound in Chrome / Edge:</strong>
-                <p style="margin:.25rem 0 0 0;font-size:.8rem;color:#1d4ed8;line-height:1.4">
+          <div class="settings-section-card tip-card" style="background:rgba(59,130,246,0.06);border:1px dashed #3b82f6;padding:.85rem">
+            <div style="display:flex;gap:.6rem;align-items:flex-start">
+              <span style="font-size:1.2rem;flex-shrink:0">💡</span>
+              <div style="min-width:0;flex:1">
+                <strong style="font-size:.85rem;color:#1e40af;display:block">Reliable Background Sound in Chrome / Edge:</strong>
+                <p style="margin:.25rem 0 0 0;font-size:.8rem;color:#1d4ed8;line-height:1.4;word-break:break-word">
                   To ensure alarms ring immediately even when this window is minimized, click the <strong>🔒 Tune / Lock icon</strong> on the left side of the address bar &rarr; <strong>Site settings</strong> &rarr; find <strong>Sound</strong> &rarr; change it to <strong>Allow</strong>.
                 </p>
               </div>
@@ -424,7 +424,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="row" style="justify-content:flex-end;margin-top:1.25rem">
+        <div style="display:flex;justify-content:flex-end;margin-top:1.25rem">
           <button class="btn amber" @click="alarm.isSettingsOpen.value = false">
             Done & Save
           </button>
@@ -716,19 +716,63 @@ onBeforeUnmount(() => {
   background: rgba(9, 13, 22, 0.65);
   backdrop-filter: blur(4px);
   z-index: 200;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 1rem;
+  overflow: hidden;
 }
 .alarm-modal {
   width: 100%;
-  max-width: 620px;
+  max-width: 580px;
   max-height: 90vh;
   overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
   border-radius: 12px;
   background: #ffffff;
   color: var(--t);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  padding: 1.25rem 1.4rem;
+}
+.alarm-modal * {
+  box-sizing: border-box;
+}
+.alarm-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line-subtle);
+  padding-bottom: .85rem;
+  gap: .75rem;
+  min-width: 0;
+}
+.alarm-modal-title {
+  display: flex;
+  gap: .6rem;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+.alarm-controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  width: 100%;
+}
+@media (max-width: 540px) {
+  .alarm-controls-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.alarm-select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  text-overflow: ellipsis;
 }
 .close-modal-btn {
   background: none;
@@ -737,17 +781,31 @@ onBeforeUnmount(() => {
   cursor: pointer;
   color: var(--muted);
   padding: 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.close-modal-btn:hover {
+  color: var(--ink);
 }
 .alarm-settings-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: 100%;
+  min-width: 0;
 }
 .settings-section-card {
   background: var(--bg-alt, #f8fafc);
   border: 1px solid var(--line-subtle, #e2e8f0);
   border-radius: 8px;
   padding: 14px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.settings-section-card.tip-card {
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 /* Switch Controls */
