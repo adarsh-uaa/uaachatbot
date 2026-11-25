@@ -724,34 +724,37 @@ onBeforeUnmount(() => {
 }
 .alarm-modal {
   width: 100%;
-  max-width: 580px;
+  max-width: min(580px, calc(100vw - 2rem));
   max-height: 90vh;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: hidden !important;
   box-sizing: border-box;
   border-radius: 12px;
   background: #ffffff;
   color: var(--t);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
   padding: 1.25rem 1.4rem;
+  margin: 0 auto;
 }
 .alarm-modal * {
   box-sizing: border-box;
+  min-width: 0;
 }
 .alarm-modal-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 1.25rem;
   border-bottom: 1px solid var(--line-subtle);
   padding-bottom: .85rem;
   gap: .75rem;
+  width: 100%;
   min-width: 0;
 }
 .alarm-modal-title {
   display: flex;
   gap: .6rem;
-  align-items: center;
+  align-items: flex-start;
   min-width: 0;
   flex: 1;
 }
@@ -761,6 +764,7 @@ onBeforeUnmount(() => {
   gap: 1rem;
   margin-bottom: 1rem;
   width: 100%;
+  min-width: 0;
 }
 @media (max-width: 540px) {
   .alarm-controls-grid {
@@ -773,6 +777,8 @@ onBeforeUnmount(() => {
   min-width: 0;
   box-sizing: border-box;
   text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .close-modal-btn {
   background: none;
@@ -793,6 +799,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   width: 100%;
   min-width: 0;
+  overflow-x: hidden;
 }
 .settings-section-card {
   background: var(--bg-alt, #f8fafc);
@@ -802,10 +809,11 @@ onBeforeUnmount(() => {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
+  overflow-x: hidden;
 }
 .settings-section-card.tip-card {
   word-break: break-word;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* Switch Controls */
@@ -915,120 +923,4 @@ input:checked + .switch-slider:before {
 }
 </style>
 
-<style scoped>
-.brand-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: var(--accent);
-  color: #fff;
-  flex-shrink: 0;
-}
-.user-avatar-circle {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-weight: 700;
-  font-size: .8rem;
-  flex-shrink: 0;
-}
 
-/* Mobile top bar */
-.mobile-topbar {
-  display: none;
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  background: #090d16;
-  color: #ffffff;
-  padding: 0.75rem 1rem;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-}
-.hamburger-btn {
-  background: none;
-  border: 0;
-  color: #ffffff;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 6px;
-}
-.hamburger-btn:hover {
-  background: rgba(255,255,255,0.1);
-}
-.mobile-brand {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 1.05rem;
-}
-.mobile-avatar {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  color: #fff;
-  display: grid;
-  place-items: center;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-.mobile-close-btn {
-  display: none;
-  background: rgba(255,255,255,0.1);
-  border: 0;
-  color: #ffffff;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  place-items: center;
-  cursor: pointer;
-}
-
-/* Responsive Breakpoints */
-@media (max-width: 860px) {
-  .mobile-topbar {
-    display: flex;
-  }
-  .mobile-close-btn {
-    display: grid;
-  }
-  .mobile-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(9, 13, 22, 0.6);
-    backdrop-filter: blur(4px);
-    z-index: 90;
-  }
-  .side {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 270px;
-    z-index: 100;
-    transform: translateX(-100%);
-    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-    box-shadow: 0 0 30px rgba(0,0,0,0.5);
-  }
-  .side.mobile-show {
-    transform: translateX(0);
-  }
-  .shell {
-    display: block;
-  }
-  .main {
-    padding: 1.25rem 1rem 4rem;
-  }
-}
-</style>

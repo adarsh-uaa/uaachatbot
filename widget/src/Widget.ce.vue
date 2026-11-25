@@ -198,25 +198,49 @@ async function rpc(name, args) {
   if (!r.ok) throw new Error(j?.message || 'Something went wrong')
   return j
 }
-const norm = s => ' ' + s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim() + ' '
+function cleanStr(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+function wordsOf(s) {
+  return cleanStr(s).split(/\s+/).filter(Boolean)
+}
+function stemWord(w) {
+  if (w.endsWith('ies') && w.length > 4) return w.slice(0, -3) + 'y'
+  if (w.endsWith('es') && w.length > 3) return w.slice(0, -2)
+  if (w.endsWith('s') && !w.endsWith('ss') && w.length > 2) return w.slice(0, -1)
+  return w
+}
+function matchPhrase(target, candidate, isExact) {
+  const t = cleanStr(target)
+  const c = cleanStr(candidate)
+  if (!t || !c) return false
+  if (isExact) {
+    if (t === c) return true
+    const tStem = wordsOf(t).map(stemWord).join(' ')
+    const cStem = wordsOf(c).map(stemWord).join(' ')
+    return tStem === cStem
+  }
+  if (t.includes(c) || c.includes(t)) return true
+  const tWords = wordsOf(t).map(stemWord)
+  const cWords = wordsOf(c).map(stemWord)
+  const tStem = ' ' + tWords.join(' ') + ' '
+  const cStem = ' ' + cWords.join(' ') + ' '
+  if (tStem.includes(cStem) || cStem.includes(tStem)) return true
+  if (cWords.length > 1 && cWords.every(w => tWords.includes(w))) return true
+  if (cWords.length === 1 && cWords[0].length >= 3 && tWords.some(w => w === cWords[0] || (w.length >= 4 && (w.includes(cWords[0]) || cWords[0].includes(w))))) return true
+  return false
+}
 function match(text) {
-  const n = norm(text)
   const siteRules = cfg.value?.rules || []
   for (const r of siteRules) {
+    const isExact = r.match_type === 'exact'
     // 1. Match button label (e.g. "Terminal amenities")
-    if (r.button_label) {
-      const bl = norm(r.button_label)
-      if (r.match_type === 'exact' ? n === bl : n.includes(bl)) return r
-    }
+    if (r.button_label && matchPhrase(text, r.button_label, isExact)) return r
     // 2. Match rule name
-    if (r.name) {
-      const nm = norm(r.name)
-      if (r.match_type === 'exact' ? n === nm : n.includes(nm)) return r
-    }
+    if (r.name && matchPhrase(text, r.name, isExact)) return r
     // 3. Match keywords
     for (const k of (r.keywords || [])) {
-      const kk = norm(k)
-      if (r.match_type === 'exact' ? n === kk : n.includes(kk)) return r
+      if (matchPhrase(text, k, isExact)) return r
     }
   }
   return null
@@ -257,25 +281,13 @@ function handlePillClick(rule) {
   const link = rule.link_url || (rule.action === 'faq_link' ? cfg.value?.faq_url : null)
   push('bot', rule.response, link ? { link, label: rule.button_label || 'Open link' } : {})
 
-  // Background sync with Supabase session & messages
-  rpc('widget_bot_chat', {
+  // Log query for analytics without creating staff tickets or triggering alarms
+  rpc('widget_log_query', {
     p_site_key: props.siteKey,
-    p_token: token,
-    p_query: rule.button_label
-  }).then(res => {
-    if (res?.token) {
-      token = res.token
-      localStorage.setItem(storeKey(), token)
-      startPolling()
-    }
-  }).catch(() => {
-    rpc('widget_log_query', {
-      p_site_key: props.siteKey,
-      p_query: rule.button_label,
-      p_rule: rule.id || null,
-      p_matched: true
-    }).catch(() => {})
-  })
+    p_query: rule.button_label,
+    p_rule: rule.id || null,
+    p_matched: true
+  }).catch(() => {})
 }
 
 async function ask(text, rule) {
@@ -286,17 +298,11 @@ async function ask(text, rule) {
   const matched = rule || (botChatEnabled.value ? match(text) : null)
   if (matched) {
     answer(matched)
-    // Sync with backend
-    rpc('widget_bot_chat', {
+    rpc('widget_log_query', {
       p_site_key: props.siteKey,
-      p_token: token,
-      p_query: text
-    }).then(res => {
-      if (res?.token) {
-        token = res.token
-        localStorage.setItem(storeKey(), token)
-        startPolling()
-      }
+      p_query: text,
+      p_rule: matched.id || null,
+      p_matched: true
     }).catch(() => {})
     busy.value = false
     return
@@ -308,36 +314,28 @@ async function ask(text, rule) {
       p_token: token,
       p_query: text
     })
-    if (res?.token) {
-      token = res.token
-      localStorage.setItem(storeKey(), token)
-      startPolling()
-    }
     if (res?.claimed) {
       mode.value = 'chat'
       live.value.agent = res.agent
-      await poll()
+      if (res?.token) {
+        token = res.token
+        localStorage.setItem(storeKey(), token)
+        startPolling()
+      }
       return
     }
 
-    const isFallback = res?.handoff && (
-      !res?.reply ||
-      res?.reply.toLowerCase().includes('could not find an answer') ||
-      res?.reply === t.value.fallback
-    )
-
-    if (isFallback) {
-      // Direct form without unwanted text
-      startForm(text)
-    } else if (res?.reply) {
+    if (res?.reply && !res.handoff) {
       const link = res.link_url || null
       push('bot', res.reply, link ? { link, label: res.button_label || 'Open link' } : {})
-      if (res.handoff) {
-        startForm('Visitor requested team: ' + text)
-      }
+    } else {
+      // Fallback message with polite action button to connect to team
+      const fallbackText = res?.reply || t.value.fallback || "I could not find an automated answer for that. Would you like to connect with our support team?"
+      push('bot', fallbackText, { showHandoffBtn: true, queryText: text })
     }
   } catch {
-    startForm(text)
+    const fallbackText = t.value.fallback || "I could not find an automated answer for that. Would you like to connect with our support team?"
+    push('bot', fallbackText, { showHandoffBtn: true, queryText: text })
   } finally {
     busy.value = false
   }
@@ -530,9 +528,17 @@ function newChat() {
   live.value = { messages: [], status: 'open' }
   setInitialMode()
   lastCount = 0
+  msgs.value = []
+  if (cfg.value?.texts?.greeting) {
+    msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
+  }
+  form.name = ''
+  form.email = ''
+  form.phone = ''
   form.message = ''
   phoneNumber.value = ''
   error.value = ''
+  stopPolling()
 }
 function toggle() { open.value = !open.value; if (open.value) { unread.value = false; scroll() } }
 
@@ -554,16 +560,25 @@ onMounted(async () => {
     try {
       const r = await rpc('widget_messages', { p_token: token })
       live.value = r
-      if (r.status === 'claimed' || (r.messages && r.messages.some(m => m.from === 'staff'))) {
+      if (r.status === 'closed') {
+        token = null
+        localStorage.removeItem(storeKey())
+        setInitialMode()
+      } else if (r.status === 'claimed' || (r.messages && r.messages.some(m => m.from === 'staff'))) {
         mode.value = 'chat'
+        startPolling()
+      } else if (r.status === 'open' && r.messages && r.messages.length > 0) {
+        mode.value = 'chat'
+        startPolling()
+      } else {
+        setInitialMode()
       }
-      if (r.status !== 'closed') startPolling()
     } catch {
       token = null
       localStorage.removeItem(storeKey())
+      setInitialMode()
     }
-  }
-  if (!token) {
+  } else {
     setInitialMode()
   }
 })
@@ -607,9 +622,20 @@ watch(open, v => {
           </div>
           <small>{{ mode === 'chat' && live.agent ? `${live.agent} is assisting you` : t.subtitle }}</small>
         </div>
-        <button class="x" aria-label="Close chat" @click="toggle">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
+        <div class="hdr-actions">
+          <button
+            v-if="mode === 'chat' || msgs.length > 1"
+            class="hdr-icon-btn"
+            title="Start fresh conversation"
+            aria-label="Start fresh conversation"
+            @click="newChat"
+          >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 12a9 9 0 0 1 15.5-6.4L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.4L3 16M3 21v-5h5"/></svg>
+          </button>
+          <button class="x" aria-label="Close chat" @click="toggle">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
       </header>
       <div ref="box" class="body" aria-live="polite">
         <!-- 1. Bot Mode: Automated answers and suggestion pills -->
@@ -617,8 +643,15 @@ watch(open, v => {
           <div v-for="(m, i) in msgs" :key="i" class="m" :class="m.from">
             {{ m.text }}
             <a v-if="m.link" :href="m.link" target="_blank" rel="noopener" class="lnk">{{ m.label }} →</a>
+            <button
+              v-if="m.showHandoffBtn"
+              class="pill solid handoff-btn"
+              @click="startForm(m.queryText || 'Passenger requested assistance')"
+            >
+              💬 Connect with our team
+            </button>
           </div>
-          <div v-if="msgs.length < 2 && buttons.length" class="chips">
+          <div v-if="buttons.length" class="chips">
             <button v-for="b in buttons" :key="b.id || b.button_label" class="pill" @click="handlePillClick(b)">
               {{ b.button_label }}
             </button>
@@ -835,8 +868,13 @@ header small {
   font-weight: 500;
   opacity: 0.9;
 }
-.x {
-  background: rgba(255, 255, 255, 0.1);
+.hdr-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.hdr-icon-btn, .x {
+  background: rgba(255, 255, 255, 0.12);
   border: 0;
   color: var(--hdr-txt);
   width: 24px;
@@ -848,7 +886,7 @@ header small {
   transition: background .15s ease, transform .15s ease;
   padding: 0;
 }
-.x:hover {
+.hdr-icon-btn:hover, .x:hover {
   background: rgba(255, 255, 255, 0.22);
   transform: scale(1.05);
 }
