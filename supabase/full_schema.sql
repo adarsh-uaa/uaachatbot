@@ -463,7 +463,11 @@ begin
     'texts', s.texts,
     'faq_url', s.faq_url,
     'escalation_alarm_enabled', coalesce(s.escalation_alarm_enabled, (s.theme->>'escalation_alarm_enabled')::boolean, true),
-    'bot_chat_enabled', coalesce(s.bot_chat_enabled, (s.theme->>'bot_chat_enabled')::boolean, false),
+    'bot_chat_enabled', case
+      when s.bot_chat_enabled = true or (s.theme->>'bot_chat_enabled')::boolean = true then true
+      when s.bot_chat_enabled = false and (s.theme->>'bot_chat_enabled')::boolean = false then false
+      else exists (select 1 from bot_rules br where (br.site_id = s.id or br.site_id is null) and br.is_active and br.action = 'reply')
+    end,
     'rules', (
       select coalesce(jsonb_agg(
         jsonb_build_object(
@@ -649,7 +653,11 @@ begin
   if not _origin_ok(s.allowed_origins) then raise exception 'origin not allowed'; end if;
   if char_length(clean_q) not between 1 and 4000 then raise exception 'Message too long or empty'; end if;
 
-  is_bot_on := coalesce(s.bot_chat_enabled, (s.theme->>'bot_chat_enabled')::boolean, false);
+  is_bot_on := case
+    when s.bot_chat_enabled = true or (s.theme->>'bot_chat_enabled')::boolean = true then true
+    when s.bot_chat_enabled = false and (s.theme->>'bot_chat_enabled')::boolean = false then false
+    else exists (select 1 from bot_rules br where (br.site_id = s.id or br.site_id is null) and br.is_active and br.action = 'reply')
+  end;
 
   -- Check if visitor already has an active claimed live agent session
   if p_token is not null and p_token ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then

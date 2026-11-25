@@ -15,6 +15,7 @@ function mount() {
   s.dataset.siteKey = key.value
   s.dataset.apiUrl = cfg.supabaseUrl as string
   s.dataset.apiKey = cfg.supabaseKey as string
+  s.dataset.botEnabled = 'true'
   document.body.appendChild(s)
   mounted.value = true
 }

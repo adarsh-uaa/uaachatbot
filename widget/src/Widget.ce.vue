@@ -149,7 +149,7 @@ const botChatEnabled = computed(() => {
     return null
   }
 
-  // 1. Host app explicit prop overrides
+  // 1. Host app explicit prop overrides (<uaa-chat bot-enabled="true">)
   const p1 = checkVal(props.botEnabled)
   if (p1 !== null) return p1
   const p2 = checkVal(props.bot)
@@ -159,7 +159,7 @@ const botChatEnabled = computed(() => {
   const p4 = checkVal(props.botChat)
   if (p4 !== null) return p4
 
-  // 2. Global window configuration if app defined window.UAA_BOT_ENABLED or window.uaaBotEnabled
+  // 2. Global window configuration or localStorage fallback
   if (typeof window !== 'undefined') {
     const w1 = checkVal(window.UAA_BOT_ENABLED)
     if (w1 !== null) return w1
@@ -167,16 +167,23 @@ const botChatEnabled = computed(() => {
     if (w2 !== null) return w2
     const w3 = checkVal(window.uaaBot)
     if (w3 !== null) return w3
+
+    if (props.siteKey) {
+      const localBot = checkVal(localStorage.getItem('uaa:site_bot:' + props.siteKey))
+      if (localBot !== null) return localBot
+    }
   }
 
-  // 3. Database site settings from widget_config RPC
-  if (cfg.value?.bot_chat_enabled !== undefined && cfg.value?.bot_chat_enabled !== null) {
-    return cfg.value.bot_chat_enabled === true
-  }
-  if (cfg.value?.theme?.bot_chat_enabled !== undefined && cfg.value?.theme?.bot_chat_enabled !== null) {
-    return cfg.value.theme.bot_chat_enabled === true
-  }
-  return false
+  // 3. Database site settings & theme from widget_config
+  const c1 = checkVal(cfg.value?.bot_chat_enabled)
+  const c2 = checkVal(cfg.value?.theme?.bot_chat_enabled)
+  if (c1 === true || c2 === true) return true
+  if (c1 === false && c2 === false) return false
+
+  // 4. Default: If site has active keyword rules configured, always ENABLE bot auto-replies!
+  if (cfg.value?.rules && cfg.value.rules.length > 0) return true
+
+  return true
 })
 
 const buttons = computed(() => {
@@ -261,14 +268,9 @@ function answer(rule) {
 }
 
 function handlePillClick(rule) {
-  if (!botChatEnabled.value) {
-    // Bot mode is disabled: show form directly when clicked
-    startForm(rule.button_label || rule.name)
-    return
-  }
-
   push('me', rule.button_label)
 
+  // 1. If rule is explicit handoff to human staff ("Talk to our team")
   if (rule.action === 'handoff') {
     if (rule.response && !rule.response.toLowerCase().includes('could not find an answer') && !rule.response.toLowerCase().includes('find an answer')) {
       push('bot', rule.response, { handoff: true })
@@ -277,7 +279,7 @@ function handlePillClick(rule) {
     return
   }
 
-  // Immediate instant answer for visitor with zero lag or fallback glitch
+  // 2. Immediate instant auto-reply for visitor with zero lag or false ticket creation
   const link = rule.link_url || (rule.action === 'faq_link' ? cfg.value?.faq_url : null)
   push('bot', rule.response, link ? { link, label: rule.button_label || 'Open link' } : {})
 
@@ -294,8 +296,8 @@ async function ask(text, rule) {
   push('me', text)
   busy.value = true
 
-  // Check client rule match first for instant, accurate reply
-  const matched = rule || (botChatEnabled.value ? match(text) : null)
+  // 1. Check client rule match first for instant, accurate reply
+  const matched = rule || match(text)
   if (matched) {
     answer(matched)
     rpc('widget_log_query', {
