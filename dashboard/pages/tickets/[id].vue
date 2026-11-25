@@ -106,6 +106,129 @@ const canDelete = computed(() => {
   return r === 'admin' || r === 'developer' || r === 'manager'
 })
 
+// Slash command (/shortkey) state for saved replies
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const slashMenuOpen = ref(false)
+const slashQuery = ref('')
+const slashSelectedIndex = ref(0)
+
+const filteredCanned = computed(() => {
+  const q = slashQuery.value.trim().toLowerCase()
+  const list = canned.value.filter(c => !c.site_id || c.site_id === t.value?.site_id)
+  if (!q) return list.slice(0, 8)
+  return list.filter(c => {
+    const sc = (c.shortcut || '').toLowerCase()
+    const title = (c.title || '').toLowerCase()
+    return sc.startsWith(q) || sc.includes(q) || title.includes(q)
+  }).sort((a, b) => {
+    const aSc = (a.shortcut || '').toLowerCase()
+    const bSc = (b.shortcut || '').toLowerCase()
+    if (aSc === q) return -1
+    if (bSc === q) return 1
+    if (aSc.startsWith(q) && !bSc.startsWith(q)) return -1
+    if (!aSc.startsWith(q) && bSc.startsWith(q)) return 1
+    return 0
+  }).slice(0, 8)
+})
+
+function onBodyInput() {
+  const el = textareaRef.value
+  if (!el) return
+  const pos = el.selectionStart
+  const textBefore = body.value.slice(0, pos)
+  const match = textBefore.match(/(?:^|\s)\/([a-zA-Z0-9_-]*)$/)
+  if (match) {
+    slashQuery.value = match[1].toLowerCase()
+    slashSelectedIndex.value = 0
+    slashMenuOpen.value = true
+  } else {
+    slashMenuOpen.value = false
+  }
+}
+
+function insertCanned(c: any) {
+  if (!c) return
+  const el = textareaRef.value
+  const pos = el ? el.selectionStart : body.value.length
+  const textBefore = body.value.slice(0, pos)
+  const textAfter = body.value.slice(pos)
+  
+  const match = textBefore.match(/(?:^|\s)\/([a-zA-Z0-9_-]*)$/)
+  if (match) {
+    const tokenLen = match[1].length + 1
+    const replaceStart = pos - tokenLen
+    body.value = body.value.slice(0, replaceStart) + c.body + textAfter
+    nextTick(() => {
+      if (el) {
+        const newPos = replaceStart + c.body.length
+        el.selectionStart = newPos
+        el.selectionEnd = newPos
+        el.focus()
+      }
+    })
+  } else {
+    body.value = body.value ? body.value + '\n' + c.body : c.body
+    nextTick(() => {
+      if (el) {
+        el.selectionStart = body.value.length
+        el.selectionEnd = body.value.length
+        el.focus()
+      }
+    })
+  }
+  slashMenuOpen.value = false
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (e.ctrlKey && e.key === 'Enter') {
+    e.preventDefault()
+    send()
+    return
+  }
+
+  if (slashMenuOpen.value && filteredCanned.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      slashSelectedIndex.value = (slashSelectedIndex.value + 1) % filteredCanned.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      slashSelectedIndex.value = (slashSelectedIndex.value - 1 + filteredCanned.value.length) % filteredCanned.value.length
+      return
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      const selected = filteredCanned.value[slashSelectedIndex.value]
+      if (selected) insertCanned(selected)
+      return
+    }
+    if (e.key === 'Escape') {
+      slashMenuOpen.value = false
+      return
+    }
+  }
+
+  // Support instant expansion on typing Space after shortkey: e.g. "/g " -> expands Greeting
+  if (e.key === ' ' || e.key === 'Spacebar') {
+    const el = textareaRef.value
+    if (el) {
+      const pos = el.selectionStart
+      const textBefore = body.value.slice(0, pos)
+      const match = textBefore.match(/(?:^|\s)\/([a-zA-Z0-9_-]+)$/)
+      if (match) {
+        const shortcutTyped = match[1].toLowerCase()
+        const exactMatch = canned.value.find(c => (c.shortcut || '').toLowerCase() === shortcutTyped)
+        if (exactMatch) {
+          e.preventDefault()
+          insertCanned(exactMatch)
+          return
+        }
+      }
+    }
+  }
+}
+
 async function deleteChat() {
   if (!canDelete.value) {
     show('Only managers and developers can delete conversations.', 'err')
@@ -127,7 +250,7 @@ async function deleteChat() {
     confirmDeleteModal.value = false
   }
 }
-function useCanned(e: any) { const c = canned.value.find(x => x.id === e.target.value); if (c) body.value = c.body; e.target.value = '' }
+function useCanned(e: any) { const c = canned.value.find(x => x.id === e.target.value); if (c) insertCanned(c); e.target.value = '' }
 const who = (m: any) => m.sender === 'visitor' ? (t.value?.visitor_name || 'Passenger') : m.sender === 'staff' ? staff.label(m.author_id) : m.sender === 'bot' ? 'Bot Assistant' : 'System'
 
 let ch: any
@@ -304,18 +427,23 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
     </div>
 
     <!-- Reply / Internal Note Composer -->
-    <div v-if="t.status !== 'closed'" class="card">
+    <div v-if="t.status !== 'closed'" class="card composer-card">
       <div class="row" style="justify-content:space-between;margin-bottom:.75rem">
         <div class="row">
           <select style="width:auto" @change="useCanned" aria-label="Insert saved reply">
             <option value="">Insert saved reply…</option>
-            <option v-for="c in canned" :key="c.id" :value="c.id">{{ c.title }}</option>
+            <option v-for="c in canned" :key="c.id" :value="c.id">
+              {{ c.title }}{{ c.shortcut ? ` (/${c.shortcut})` : '' }}
+            </option>
           </select>
           <label style="margin:0;font-weight:500;display:inline-flex;align-items:center;gap:.4rem;cursor:pointer">
             <input type="checkbox" v-model="note" style="width:auto;cursor:pointer">
             <span>Internal staff note <small class="sub">(visitor will not see this)</small></span>
           </label>
         </div>
+        <small class="sub" style="margin:0;font-size:.78rem">
+          💡 Type <code>/</code> or <code>/&lt;key&gt;</code> (e.g. <code>/g</code>) for quick replies
+        </small>
       </div>
 
       <!-- Warning if passenger has not submitted contact form -->
@@ -332,12 +460,59 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
         </div>
       </div>
 
-      <textarea
-        v-model="body"
-        :placeholder="note ? 'Write an internal note for staff…' : (mine || lead ? 'Type your reply to the passenger…' : 'Claim this ticket to reply')"
-        @keydown.ctrl.enter="send"
-        style="margin-bottom:.75rem"
-      />
+      <div class="composer-relative-wrapper">
+        <!-- Autocomplete Suggestions Popover -->
+        <div
+          v-if="slashMenuOpen && filteredCanned.length > 0"
+          class="slash-menu-popup"
+        >
+          <div class="slash-menu-header">
+            <span style="font-weight:700;font-size:.75rem;color:var(--muted);letter-spacing:.02em">
+              SAVED REPLIES (TYPE /&lt;SHORTKEY&gt;)
+            </span>
+            <span style="font-size:.72rem;color:var(--subtle)">
+              <kbd class="mini-kbd">Tab</kbd> or <kbd class="mini-kbd">Enter</kbd> to insert · <kbd class="mini-kbd">Esc</kbd> to close
+            </span>
+          </div>
+          <div class="slash-menu-list">
+            <div
+              v-for="(c, idx) in filteredCanned"
+              :key="c.id"
+              class="slash-menu-item"
+              :class="{ active: idx === slashSelectedIndex }"
+              @mouseenter="slashSelectedIndex = idx"
+              @mousedown.prevent="insertCanned(c)"
+            >
+              <div style="display:flex;align-items:center;gap:.5rem;justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:.45rem;min-width:0">
+                  <span v-if="c.shortcut" class="chip sm" style="background:#fef3c7;border:1px solid #fde68a;color:#92400e;font-weight:700;font-size:.72rem;padding:1px 6px">
+                    /{{ c.shortcut }}
+                  </span>
+                  <strong style="font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                    {{ c.title }}
+                  </strong>
+                </div>
+                <small style="color:var(--muted);font-size:.72rem;flex-shrink:0">
+                  {{ c.site_id ? 'Site' : 'Global' }}
+                </small>
+              </div>
+              <p style="margin:.2rem 0 0 0;font-size:.78rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3">
+                {{ c.body }}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <textarea
+          ref="textareaRef"
+          v-model="body"
+          :placeholder="note ? 'Write an internal note for staff… (type / for saved replies)' : (mine || lead ? 'Type your reply to the passenger… (type / or /g for saved replies)' : 'Claim this ticket to reply')"
+          @input="onBodyInput"
+          @keydown="onKeyDown"
+          @blur="setTimeout(() => { slashMenuOpen = false }, 200)"
+          style="margin-bottom:.75rem;min-height:95px"
+        />
+      </div>
 
       <div class="row" style="justify-content:space-between">
         <button class="btn amber" :disabled="!body.trim()" @click="send">
@@ -506,5 +681,66 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
   display: grid;
   place-items: center;
   flex-shrink: 0;
+}
+
+/* Slash Command Autocomplete Popover */
+.composer-relative-wrapper {
+  position: relative;
+  width: 100%;
+}
+.slash-menu-popup {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-width: 520px;
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  z-index: 50;
+  overflow: hidden;
+  animation: popoverFadeIn .15s ease-out;
+}
+.slash-menu-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: var(--bg-alt, #f8fafc);
+  border-bottom: 1px solid var(--line-subtle, #f1f5f9);
+}
+.slash-menu-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.slash-menu-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line-subtle, #f1f5f9);
+  transition: background 0.12s ease;
+}
+.slash-menu-item:last-child {
+  border-bottom: 0;
+}
+.slash-menu-item:hover,
+.slash-menu-item.active {
+  background: #f1f5f9;
+}
+.mini-kbd {
+  display: inline-block;
+  padding: 1px 4px;
+  font-size: 0.7rem;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.1);
+}
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 </style>

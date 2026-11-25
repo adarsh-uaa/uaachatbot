@@ -287,150 +287,154 @@ onBeforeUnmount(() => {
     </main>
 
     <!-- 🚨 Escalation Alarm & Sound Settings Modal (Global + Per-Site Controls) -->
-    <div v-if="alarm.isSettingsOpen.value" class="alarm-modal-backdrop" @click="alarm.isSettingsOpen.value = false">
-      <div class="alarm-modal card" @click.stop>
-        <div class="alarm-modal-header">
-          <div class="alarm-modal-title">
-            <span style="font-size:1.4rem;flex-shrink:0">🚨</span>
-            <div style="min-width:0;flex:1">
-              <h2 style="margin:0;font-size:1.15rem;line-height:1.2">Escalation Alarm Settings</h2>
-              <p class="sub" style="margin:.15rem 0 0 0;font-size:.82rem;line-height:1.3">Continuous alert when a passenger escalates from bot to team.</p>
-            </div>
-          </div>
-          <button class="close-modal-btn" aria-label="Close" @click="alarm.isSettingsOpen.value = false">✕</button>
-        </div>
-
-        <div class="alarm-settings-body">
-          <!-- 1. All Sites Together: Master Toggle -->
-          <div class="settings-section-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem">
-              <div style="min-width:0;flex:1">
-                <strong style="font-size:.95rem;display:block">Global Escalation Alarm</strong>
-                <p class="sub" style="margin:.2rem 0 0 0;font-size:.82rem;line-height:1.4">
-                  Master switch for all sites together. When active, alarm rings continuously until tickets are claimed or responded to.
-                </p>
+    <ClientOnly>
+      <Teleport to="body">
+        <div v-if="alarm.isSettingsOpen.value" class="alarm-modal-backdrop" @click="alarm.isSettingsOpen.value = false">
+          <div class="alarm-modal card" @click.stop>
+            <div class="alarm-modal-header">
+              <div class="alarm-modal-title">
+                <span style="font-size:1.4rem;flex-shrink:0">🚨</span>
+                <div style="min-width:0;flex:1">
+                  <h2 style="margin:0;font-size:1.15rem;line-height:1.2">Escalation Alarm Settings</h2>
+                  <p class="sub" style="margin:.15rem 0 0 0;font-size:.82rem;line-height:1.3">Continuous alert when a passenger escalates from bot to team.</p>
+                </div>
               </div>
-              <label class="switch-control" style="flex-shrink:0">
-                <input
-                  type="checkbox"
-                  :checked="alarm.globalEnabled.value"
-                  @change="alarm.toggleGlobal(!alarm.globalEnabled.value)"
-                >
-                <span class="switch-slider" />
-              </label>
-            </div>
-          </div>
-
-          <!-- 2. Sound Tone, Volume & Repeat Timing -->
-          <div class="settings-section-card">
-            <h3 style="font-size:.95rem;margin:0 0 .75rem 0">Audio Alert & Ringtone</h3>
-            <div class="alarm-controls-grid">
-              <div style="min-width:0">
-                <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.35rem">Alarm Sound Profile</label>
-                <select v-model="alarm.soundType.value" @change="alarm.savePreferences()" class="alarm-select">
-                  <option value="tawk">🔔 Tawk.to Chat Ring (Warble)</option>
-                  <option value="siren">🚨 Loud Emergency Siren</option>
-                  <option value="radar">📡 High Sonar / Radar Sweep</option>
-                  <option value="chime">🔔 Airport Boarding Chime</option>
-                  <option value="beep">⚡ Double Crisp Beep</option>
-                </select>
-              </div>
-              <div style="min-width:0">
-                <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.35rem">Repeat Frequency / Mode</label>
-                <select v-model.number="alarm.intervalSec.value" @change="alarm.savePreferences()" class="alarm-select">
-                  <option :value="0">⚡ Continuous Alarm (Non-stop)</option>
-                  <option :value="2">Every 2 seconds (Rapid loop)</option>
-                  <option :value="4">Every 4 seconds (Urgent)</option>
-                  <option :value="6">Every 6 seconds (Standard)</option>
-                  <option :value="10">Every 10 seconds</option>
-                  <option :value="15">Every 15 seconds</option>
-                </select>
-              </div>
+              <button class="close-modal-btn" aria-label="Close" @click="alarm.isSettingsOpen.value = false">✕</button>
             </div>
 
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-top:.75rem">
-              <div style="display:flex;align-items:center;gap:.6rem;flex:1;min-width:180px">
-                <span style="font-size:.82rem;font-weight:600;flex-shrink:0">Volume</span>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="1"
-                  step="0.05"
-                  v-model.number="alarm.volume.value"
-                  @change="alarm.savePreferences()"
-                  style="flex:1;min-width:60px"
-                >
-                <span style="font-size:.8rem;font-family:monospace;flex-shrink:0">{{ Math.round(alarm.volume.value * 100) }}%</span>
+            <div class="alarm-settings-body">
+              <!-- 1. All Sites Together: Master Toggle -->
+              <div class="settings-section-card">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem">
+                  <div style="min-width:0;flex:1">
+                    <strong style="font-size:.95rem;display:block">Global Escalation Alarm</strong>
+                    <p class="sub" style="margin:.2rem 0 0 0;font-size:.82rem;line-height:1.4">
+                      Master switch for all sites together. When active, alarm rings continuously until tickets are claimed or responded to.
+                    </p>
+                  </div>
+                  <label class="switch-control" style="flex-shrink:0">
+                    <input
+                      type="checkbox"
+                      :checked="alarm.globalEnabled.value"
+                      @change="alarm.toggleGlobal(!alarm.globalEnabled.value)"
+                    >
+                    <span class="switch-slider" />
+                  </label>
+                </div>
               </div>
-              <button class="btn alt sm" @click="alarm.testSound()" style="white-space:nowrap;flex-shrink:0">
-                ▶ Test Sound
+
+              <!-- 2. Sound Tone, Volume & Repeat Timing -->
+              <div class="settings-section-card">
+                <h3 style="font-size:.95rem;margin:0 0 .75rem 0">Audio Alert & Ringtone</h3>
+                <div class="alarm-controls-grid">
+                  <div style="min-width:0">
+                    <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.35rem">Alarm Sound Profile</label>
+                    <select v-model="alarm.soundType.value" @change="alarm.savePreferences()" class="alarm-select">
+                      <option value="tawk">🔔 Tawk.to Chat Ring (Warble)</option>
+                      <option value="siren">🚨 Loud Emergency Siren</option>
+                      <option value="radar">📡 High Sonar / Radar Sweep</option>
+                      <option value="chime">🔔 Airport Boarding Chime</option>
+                      <option value="beep">⚡ Double Crisp Beep</option>
+                    </select>
+                  </div>
+                  <div style="min-width:0">
+                    <label style="font-size:.82rem;font-weight:600;display:block;margin-bottom:.35rem">Repeat Frequency / Mode</label>
+                    <select v-model.number="alarm.intervalSec.value" @change="alarm.savePreferences()" class="alarm-select">
+                      <option :value="0">⚡ Continuous Alarm (Non-stop)</option>
+                      <option :value="2">Every 2 seconds (Rapid loop)</option>
+                      <option :value="4">Every 4 seconds (Urgent)</option>
+                      <option :value="6">Every 6 seconds (Standard)</option>
+                      <option :value="10">Every 10 seconds</option>
+                      <option :value="15">Every 15 seconds</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-top:.75rem">
+                  <div style="display:flex;align-items:center;gap:.6rem;flex:1;min-width:180px">
+                    <span style="font-size:.82rem;font-weight:600;flex-shrink:0">Volume</span>
+                    <input
+                      type="range"
+                      min="0.1"
+                      max="1"
+                      step="0.05"
+                      v-model.number="alarm.volume.value"
+                      @change="alarm.savePreferences()"
+                      style="flex:1;min-width:60px"
+                    >
+                    <span style="font-size:.8rem;font-family:monospace;flex-shrink:0">{{ Math.round(alarm.volume.value * 100) }}%</span>
+                  </div>
+                  <button class="btn alt sm" @click="alarm.testSound()" style="white-space:nowrap;flex-shrink:0">
+                    ▶ Test Sound
+                  </button>
+                </div>
+              </div>
+
+              <!-- 3. Individual Site Controls (Per-Site Depending) -->
+              <div class="settings-section-card">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap">
+                  <div style="min-width:0;flex:1 1 180px">
+                    <h3 style="font-size:.95rem;margin:0">Individual Site Controls</h3>
+                    <p class="sub" style="margin:0;font-size:.8rem;line-height:1.35">Enable or silence the escalation alarm for specific airport properties.</p>
+                  </div>
+                  <div style="display:flex;gap:.4rem;flex-shrink:0">
+                    <button class="btn alt sm" style="font-size:.75rem;padding:3px 8px" @click="alarm.setAllSites(true)">
+                      Turn All ON
+                    </button>
+                    <button class="btn alt sm" style="font-size:.75rem;padding:3px 8px" @click="alarm.setAllSites(false)">
+                      Mute All
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="!alarm.sitesList.value.length" class="empty" style="padding:1rem 0">
+                  Loading sites…
+                </div>
+                <div v-else class="site-alarm-list">
+                  <div
+                    v-for="site in alarm.sitesList.value"
+                    :key="site.id"
+                    class="site-alarm-row"
+                  >
+                    <div style="display:flex;gap:.5rem;align-items:center;min-width:0;flex:1">
+                      <span style="font-size:.9rem;flex-shrink:0">{{ site.escalation_alarm_enabled ? '🔔' : '🔕' }}</span>
+                      <strong style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.88rem">{{ site.name }}</strong>
+                    </div>
+                    <label class="switch-control sm" style="flex-shrink:0">
+                      <input
+                        type="checkbox"
+                        :checked="site.escalation_alarm_enabled"
+                        @change="alarm.toggleSite(site.id, !site.escalation_alarm_enabled)"
+                      >
+                      <span class="switch-slider" />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 4. Reliable Background Audio Tip for Chrome / Edge -->
+              <div class="settings-section-card tip-card" style="background:rgba(59,130,246,0.06);border:1px dashed #3b82f6;padding:.85rem">
+                <div style="display:flex;gap:.6rem;align-items:flex-start">
+                  <span style="font-size:1.2rem;flex-shrink:0">💡</span>
+                  <div style="min-width:0;flex:1">
+                    <strong style="font-size:.85rem;color:#1e40af;display:block">Reliable Background Sound in Chrome / Edge:</strong>
+                    <p style="margin:.25rem 0 0 0;font-size:.8rem;color:#1d4ed8;line-height:1.4;word-break:break-word">
+                      To ensure alarms ring immediately even when this window is minimized, click the <strong>🔒 Tune / Lock icon</strong> on the left side of the address bar &rarr; <strong>Site settings</strong> &rarr; find <strong>Sound</strong> &rarr; change it to <strong>Allow</strong>.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;margin-top:1.25rem">
+              <button class="btn amber" @click="alarm.isSettingsOpen.value = false">
+                Done & Save
               </button>
             </div>
           </div>
-
-          <!-- 3. Individual Site Controls (Per-Site Depending) -->
-          <div class="settings-section-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap">
-              <div style="min-width:0;flex:1 1 180px">
-                <h3 style="font-size:.95rem;margin:0">Individual Site Controls</h3>
-                <p class="sub" style="margin:0;font-size:.8rem;line-height:1.35">Enable or silence the escalation alarm for specific airport properties.</p>
-              </div>
-              <div style="display:flex;gap:.4rem;flex-shrink:0">
-                <button class="btn alt sm" style="font-size:.75rem;padding:3px 8px" @click="alarm.setAllSites(true)">
-                  Turn All ON
-                </button>
-                <button class="btn alt sm" style="font-size:.75rem;padding:3px 8px" @click="alarm.setAllSites(false)">
-                  Mute All
-                </button>
-              </div>
-            </div>
-
-            <div v-if="!alarm.sitesList.value.length" class="empty" style="padding:1rem 0">
-              Loading sites…
-            </div>
-            <div v-else class="site-alarm-list">
-              <div
-                v-for="site in alarm.sitesList.value"
-                :key="site.id"
-                class="site-alarm-row"
-              >
-                <div style="display:flex;gap:.5rem;align-items:center;min-width:0;flex:1">
-                  <span style="font-size:.9rem;flex-shrink:0">{{ site.escalation_alarm_enabled ? '🔔' : '🔕' }}</span>
-                  <strong style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.88rem">{{ site.name }}</strong>
-                </div>
-                <label class="switch-control sm" style="flex-shrink:0">
-                  <input
-                    type="checkbox"
-                    :checked="site.escalation_alarm_enabled"
-                    @change="alarm.toggleSite(site.id, !site.escalation_alarm_enabled)"
-                  >
-                  <span class="switch-slider" />
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- 4. Reliable Background Audio Tip for Chrome / Edge -->
-          <div class="settings-section-card tip-card" style="background:rgba(59,130,246,0.06);border:1px dashed #3b82f6;padding:.85rem">
-            <div style="display:flex;gap:.6rem;align-items:flex-start">
-              <span style="font-size:1.2rem;flex-shrink:0">💡</span>
-              <div style="min-width:0;flex:1">
-                <strong style="font-size:.85rem;color:#1e40af;display:block">Reliable Background Sound in Chrome / Edge:</strong>
-                <p style="margin:.25rem 0 0 0;font-size:.8rem;color:#1d4ed8;line-height:1.4;word-break:break-word">
-                  To ensure alarms ring immediately even when this window is minimized, click the <strong>🔒 Tune / Lock icon</strong> on the left side of the address bar &rarr; <strong>Site settings</strong> &rarr; find <strong>Sound</strong> &rarr; change it to <strong>Allow</strong>.
-                </p>
-              </div>
-            </div>
-          </div>
         </div>
-
-        <div style="display:flex;justify-content:flex-end;margin-top:1.25rem">
-          <button class="btn amber" @click="alarm.isSettingsOpen.value = false">
-            Done & Save
-          </button>
-        </div>
-      </div>
-    </div>
+      </Teleport>
+    </ClientOnly>
 
     <div v-if="toast" class="toast" :class="toast.kind" role="status">{{ toast.msg }}</div>
   </div>
@@ -715,7 +719,7 @@ onBeforeUnmount(() => {
   inset: 0;
   background: rgba(9, 13, 22, 0.65);
   backdrop-filter: blur(4px);
-  z-index: 200;
+  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -731,10 +735,11 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   border-radius: 12px;
   background: #ffffff;
-  color: var(--t);
+  color: var(--ink);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
   padding: 1.25rem 1.4rem;
   margin: 0 auto;
+  overscroll-behavior: contain;
 }
 .alarm-modal * {
   box-sizing: border-box;

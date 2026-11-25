@@ -133,9 +133,11 @@ create table if not exists canned_replies (
   site_id uuid references sites(id) on delete cascade,
   title text not null,
   body text not null,
+  shortcut text,
   created_by uuid references profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
+create index if not exists idx_canned_replies_shortcut on canned_replies (lower(shortcut)) where shortcut is not null;
 
 -- Support Tickets
 create table if not exists tickets (
@@ -1347,9 +1349,10 @@ insert into bot_rules (site_id, name, keywords, match_type, action, response, li
 on conflict do nothing;
 
 -- Default Canned Replies
-insert into canned_replies (site_id, title, body) values
-  (null, 'Thanks and checking', 'Thank you for contacting our airport support desk. I am looking into this for you and will update you shortly.'),
-  (null, 'Need booking ref', 'Could you please share your flight number, booking reference, and terminal location so we can assist you right away?')
+insert into canned_replies (site_id, title, body, shortcut) values
+  (null, 'Greeting', 'Hello! Thank you for contacting our airport support desk. How may I assist you today?', 'g'),
+  (null, 'Thanks and checking', 'Thank you for contacting our airport support desk. I am looking into this for you and will update you shortly.', 'thanks'),
+  (null, 'Need booking ref', 'Could you please share your flight number, booking reference, and terminal location so we can assist you right away?', 'ref')
 on conflict do nothing;
 
 -- Default Demo Site (Ready to test out of the box)
