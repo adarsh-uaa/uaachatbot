@@ -267,6 +267,15 @@ function answer(rule) {
   push('bot', rule.response, link ? { link, label: rule.button_label || 'Open link' } : {})
 }
 
+function getBotHistoryPayload() {
+  return msgs.value
+    .filter(m => (m.from === 'me' || m.from === 'bot') && m.text && typeof m.text === 'string' && m.text.trim())
+    .map(m => ({
+      sender: m.from === 'me' ? 'visitor' : 'bot',
+      body: m.text.trim()
+    }))
+}
+
 function handlePillClick(rule) {
   push('me', rule.button_label)
 
@@ -311,10 +320,18 @@ async function ask(text, rule) {
   }
 
   try {
+    const history = getBotHistoryPayload()
     const res = await rpc('widget_bot_chat', {
       p_site_key: props.siteKey,
       p_token: token,
-      p_query: text
+      p_query: text,
+      p_history: history
+    }).catch(async () => {
+      return await rpc('widget_bot_chat', {
+        p_site_key: props.siteKey,
+        p_token: token,
+        p_query: text
+      })
     })
     if (res?.claimed) {
       mode.value = 'chat'
@@ -364,11 +381,19 @@ function cancelForm() {
 async function startLiveChat(text) {
   push('me', text)
   busy.value = true
+  const history = getBotHistoryPayload()
   try {
     const res = await rpc('widget_escalate_to_team', {
       p_site_key: props.siteKey,
       p_token: token,
-      p_reason: text
+      p_reason: text,
+      p_history: history
+    }).catch(async () => {
+      return await rpc('widget_escalate_to_team', {
+        p_site_key: props.siteKey,
+        p_token: token,
+        p_reason: text
+      })
     })
     if (res?.token) {
       token = res.token
@@ -415,18 +440,28 @@ async function createTicketWithFallback(name = form.name, email = form.email, ph
   const finalName = name || 'Passenger'
   const finalEmail = email || 'anonymous@uaa.chat'
   const finalMsg = message || 'Assistance requested'
+  const history = getBotHistoryPayload()
   try {
     return await rpc('widget_create_ticket', {
       p_site_key: props.siteKey,
       p_name: finalName,
       p_email: finalEmail,
       p_phone: phone || null,
-      p_message: finalMsg
+      p_message: finalMsg,
+      p_history: history
     })
   } catch (err) {
     const msg = String(err?.message || '')
-    // Fallback if database has 4-arg function signature in PostgREST schema cache
-    if (msg.includes('schema cache') || msg.includes('Could not find the function') || msg.includes('widget_create_ticket')) {
+    // Fallback if database has older function signature in PostgREST schema cache
+    try {
+      return await rpc('widget_create_ticket', {
+        p_site_key: props.siteKey,
+        p_name: finalName,
+        p_email: finalEmail,
+        p_phone: phone || null,
+        p_message: finalMsg
+      })
+    } catch {
       const combinedMsg = phone ? `${finalMsg}\n\n[Contact Phone: ${phone}]` : finalMsg
       return await rpc('widget_create_ticket', {
         p_site_key: props.siteKey,
@@ -435,7 +470,6 @@ async function createTicketWithFallback(name = form.name, email = form.email, ph
         p_message: combinedMsg
       })
     }
-    throw err
   }
 }
 
@@ -452,14 +486,16 @@ async function submitForm() {
       const lastUserMsg = [...msgs.value].reverse().find(m => m.from === 'me')?.text?.trim()
       const alreadySent = lastUserMsg && lastUserMsg === form.message.trim()
       const messagePayload = alreadySent ? '' : form.message.trim()
+      const history = getBotHistoryPayload()
 
-      // Update existing bot chat ticket with visitor details
+      // Update existing bot chat ticket with visitor details and full prior bot history
       r = await rpc('widget_update_visitor_info', {
         p_token: token,
         p_name: form.name,
         p_email: form.email,
         p_phone: fullPhone || null,
-        p_message: messagePayload
+        p_message: messagePayload,
+        p_history: history
       }).catch(async () => {
         // Fallback to widget_create_ticket with schema cache fallback
         return await createTicketWithFallback(form.name, form.email, fullPhone, form.message)

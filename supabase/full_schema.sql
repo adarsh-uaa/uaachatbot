@@ -495,12 +495,16 @@ create or replace function widget_create_ticket(
   p_name text,
   p_email text,
   p_message text,
-  p_phone text default null
+  p_phone text default null,
+  p_history jsonb default '[]'::jsonb
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   s sites;
   t tickets;
+  item jsonb;
+  item_sender text;
+  item_body text;
 begin
   select * into s from sites where site_key = p_site_key and is_active;
   if not found then raise exception 'unknown site'; end if;
@@ -523,7 +527,33 @@ begin
     values (s.id, p_name, p_email, nullif(p_phone, ''), left(p_message, 100), 'open', true, true)
     returning * into t;
 
-  insert into ticket_messages(ticket_id, sender, body) values (t.id, 'visitor', p_message);
+  -- Insert previous conversation history with bot in chronological order
+  if p_history is not null and jsonb_typeof(p_history) = 'array' and jsonb_array_length(p_history) > 0 then
+    for item in select * from jsonb_array_elements(p_history)
+    loop
+      item_sender := lower(trim(coalesce(item->>'sender', item->>'from', '')));
+      item_body := trim(coalesce(item->>'body', item->>'text', ''));
+      if item_sender = 'me' then item_sender := 'visitor'; end if;
+      if item_sender in ('visitor', 'bot') and char_length(item_body) between 1 and 4000 then
+        if not exists (
+          select 1 from ticket_messages
+          where ticket_id = t.id and sender = item_sender::msg_sender and body = item_body
+        ) then
+          insert into ticket_messages(ticket_id, sender, body, created_at)
+          values (t.id, item_sender::msg_sender, item_body, clock_timestamp());
+        end if;
+      end if;
+    end loop;
+  end if;
+
+  -- Insert current visitor message if not already present in history
+  if char_length(p_message) > 0 and not exists (
+    select 1 from ticket_messages
+    where ticket_id = t.id and sender = 'visitor' and body = p_message
+  ) then
+    insert into ticket_messages(ticket_id, sender, body, created_at)
+    values (t.id, 'visitor', p_message, clock_timestamp());
+  end if;
 
   return jsonb_build_object('token', t.visitor_token, 'ticket_no', t.ticket_no);
 end $$;
@@ -537,8 +567,11 @@ create or replace function widget_create_ticket(
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 begin
-  return widget_create_ticket(p_site_key, p_name, p_email, p_message, null);
+  return widget_create_ticket(p_site_key, p_name, p_email, p_message, null, '[]'::jsonb);
 end $$;
+
+grant execute on function widget_create_ticket(text, text, text, text, text, jsonb) to anon, authenticated;
+grant execute on function widget_create_ticket(text, text, text, text) to anon, authenticated;
 
 -- 3. Widget Update Visitor Info
 create or replace function widget_update_visitor_info(
@@ -546,13 +579,16 @@ create or replace function widget_update_visitor_info(
   p_name text default null,
   p_email text default null,
   p_phone text default null,
-  p_message text default null
+  p_message text default null,
+  p_history jsonb default '[]'::jsonb
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   t tickets;
   clean_msg text;
-  last_visitor_body text;
+  item jsonb;
+  item_sender text;
+  item_body text;
 begin
   select * into t from tickets where visitor_token = p_token;
   if not found then raise exception 'conversation not found'; end if;
@@ -580,55 +616,97 @@ begin
     updated_at = now()
   where id = t.id;
 
-  -- Only insert message if not empty AND not identical to the most recent visitor message on this ticket
-  if char_length(clean_msg) > 0 then
-    select body into last_visitor_body
-    from ticket_messages
-    where ticket_id = t.id and sender = 'visitor'
-    order by created_at desc
-    limit 1;
+  -- Insert previous conversation history with bot if not already present
+  if p_history is not null and jsonb_typeof(p_history) = 'array' and jsonb_array_length(p_history) > 0 then
+    for item in select * from jsonb_array_elements(p_history)
+    loop
+      item_sender := lower(trim(coalesce(item->>'sender', item->>'from', '')));
+      item_body := trim(coalesce(item->>'body', item->>'text', ''));
+      if item_sender = 'me' then item_sender := 'visitor'; end if;
+      if item_sender in ('visitor', 'bot') and char_length(item_body) between 1 and 4000 then
+        if not exists (
+          select 1 from ticket_messages
+          where ticket_id = t.id and sender = item_sender::msg_sender and body = item_body
+        ) then
+          insert into ticket_messages(ticket_id, sender, body, created_at)
+          values (t.id, item_sender::msg_sender, item_body, clock_timestamp());
+        end if;
+      end if;
+    end loop;
+  end if;
 
-    if last_visitor_body is null or trim(last_visitor_body) <> clean_msg then
-      insert into ticket_messages(ticket_id, sender, body) values (t.id, 'visitor', clean_msg);
-    end if;
+  -- Insert message if not empty and not duplicate
+  if char_length(clean_msg) > 0 and not exists (
+    select 1 from ticket_messages
+    where ticket_id = t.id and sender = 'visitor' and body = clean_msg
+  ) then
+    insert into ticket_messages(ticket_id, sender, body, created_at)
+    values (t.id, 'visitor', clean_msg, clock_timestamp());
   end if;
 
   return jsonb_build_object('token', t.visitor_token, 'ticket_no', t.ticket_no);
 end $$;
 
+grant execute on function widget_update_visitor_info(uuid, text, text, text, text, jsonb) to anon, authenticated;
+
 -- 4. Widget Escalate to Team (rings alarm immediately)
 create or replace function widget_escalate_to_team(
   p_site_key text,
   p_token text default null,
-  p_reason text default null
+  p_reason text default null,
+  p_history jsonb default '[]'::jsonb
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   s sites;
   t tickets;
   clean_r text := trim(coalesce(p_reason, 'Passenger requested live assistance'));
+  item jsonb;
+  item_sender text;
+  item_body text;
 begin
   select * into s from sites where site_key = p_site_key and is_active;
   if not found then raise exception 'unknown site'; end if;
   if not _origin_ok(s.allowed_origins) then raise exception 'origin not allowed'; end if;
 
-  if p_token is not null then
+  if p_token is not null and p_token ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
     select * into t from tickets where visitor_token = p_token::uuid;
   end if;
 
   if t.id is null then
-    insert into tickets(site_id, visitor_name, visitor_email, subject, status, form_submitted)
-      values (s.id, 'Passenger #' || substring(gen_random_uuid()::text, 1, 4), null, left(clean_r, 80), 'open', false)
+    insert into tickets(site_id, visitor_name, visitor_email, subject, status, form_submitted, unread_by_staff)
+      values (s.id, 'Passenger #' || substring(gen_random_uuid()::text, 1, 4), null, left(clean_r, 80), 'open', false, true)
       returning * into t;
   else
     update tickets set status = 'open', updated_at = now(), unread_by_staff = true where id = t.id;
   end if;
 
-  insert into ticket_messages(ticket_id, sender, body, is_internal)
-    values (t.id, 'system', 'Visitor requested live agent: ' || clean_r, true);
+  -- Insert previous conversation history with bot
+  if p_history is not null and jsonb_typeof(p_history) = 'array' and jsonb_array_length(p_history) > 0 then
+    for item in select * from jsonb_array_elements(p_history)
+    loop
+      item_sender := lower(trim(coalesce(item->>'sender', item->>'from', '')));
+      item_body := trim(coalesce(item->>'body', item->>'text', ''));
+      if item_sender = 'me' then item_sender := 'visitor'; end if;
+      if item_sender in ('visitor', 'bot') and char_length(item_body) between 1 and 4000 then
+        if not exists (
+          select 1 from ticket_messages
+          where ticket_id = t.id and sender = item_sender::msg_sender and body = item_body
+        ) then
+          insert into ticket_messages(ticket_id, sender, body, created_at)
+          values (t.id, item_sender::msg_sender, item_body, clock_timestamp());
+        end if;
+      end if;
+    end loop;
+  end if;
+
+  insert into ticket_messages(ticket_id, sender, body, is_internal, created_at)
+    values (t.id, 'system', 'Visitor requested live agent: ' || clean_r, true, clock_timestamp());
 
   return jsonb_build_object('token', t.visitor_token, 'ticket_no', t.ticket_no, 'status', 'open');
 end $$;
+
+grant execute on function widget_escalate_to_team(text, text, text, jsonb) to anon, authenticated;
 
 -- 5. Widget Bot Chat (Matches keywords, button labels, and rule names)
 create or replace function widget_bot_chat(

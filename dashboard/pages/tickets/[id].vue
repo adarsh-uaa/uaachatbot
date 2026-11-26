@@ -416,7 +416,7 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
               <strong>{{ who(m) }}</strong>
               <span v-if="m.is_internal" class="chip" style="background:#fef3c7;color:#b45309;font-size:.7rem">INTERNAL NOTE</span>
               <span v-else-if="m.sender === 'visitor'" class="chip" style="background:#e2e8f0;color:#334155;font-size:.7rem">PASSENGER</span>
-              <span v-else-if="m.sender === 'bot'" class="chip" style="background:#f0fdf4;color:#166534;font-size:.7rem">BOT ASSISTANT</span>
+              <span v-else-if="m.sender === 'bot'" class="chip" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;font-size:.7rem;font-weight:700">🤖 BOT AUTO-REPLY</span>
               <span v-else-if="m.sender === 'staff'" class="chip" style="background:#eff6ff;color:#2563eb;font-size:.7rem">STAFF</span>
             </span>
             <small style="margin:0;font-size:.78rem;color:var(--muted)">{{ fmt(m.created_at) }}</small>
