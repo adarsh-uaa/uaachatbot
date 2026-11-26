@@ -180,12 +180,7 @@ function insertCanned(c: any) {
 }
 
 function onKeyDown(e: KeyboardEvent) {
-  if (e.ctrlKey && e.key === 'Enter') {
-    e.preventDefault()
-    send()
-    return
-  }
-
+  // 1. If autocomplete slash menu is open, handle navigation & selection
   if (slashMenuOpen.value && filteredCanned.value.length > 0) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -197,7 +192,7 @@ function onKeyDown(e: KeyboardEvent) {
       slashSelectedIndex.value = (slashSelectedIndex.value - 1 + filteredCanned.value.length) % filteredCanned.value.length
       return
     }
-    if (e.key === 'Enter' || e.key === 'Tab') {
+    if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) {
       e.preventDefault()
       const selected = filteredCanned.value[slashSelectedIndex.value]
       if (selected) insertCanned(selected)
@@ -209,7 +204,19 @@ function onKeyDown(e: KeyboardEvent) {
     }
   }
 
-  // Support instant expansion on typing Space after shortkey: e.g. "/g " -> expands Greeting
+  // 2. Enter to send, Shift + Enter for newline
+  if (e.key === 'Enter') {
+    if (e.shiftKey) {
+      // Shift + Enter: let default newline insertion occur
+      return
+    }
+    // Plain Enter or Ctrl + Enter: send message immediately
+    e.preventDefault()
+    send()
+    return
+  }
+
+  // 3. Support instant expansion on typing Space after shortkey: e.g. "/g " -> expands Greeting
   if (e.key === ' ' || e.key === 'Spacebar') {
     const el = textareaRef.value
     if (el) {
@@ -518,7 +525,7 @@ onBeforeUnmount(() => ch && sb.removeChannel(ch))
         <button class="btn amber" :disabled="!body.trim()" @click="send">
           {{ note ? 'Save Internal Note' : 'Send Reply to Passenger' }}
         </button>
-        <small class="sub" style="margin:0">Press <strong>Ctrl + Enter</strong> to send</small>
+        <small class="sub" style="margin:0">Press <strong>Enter</strong> to send · <strong>Shift + Enter</strong> for new line</small>
       </div>
     </div>
 
