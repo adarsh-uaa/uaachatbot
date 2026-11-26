@@ -394,52 +394,73 @@ alter table ticket_messages enable row level security;
 alter table bot_events enable row level security;
 
 -- Profiles: real names visible to self, users with users.view_real / users.manage, or roles admin, manager, teamlead
+drop policy if exists profiles_read on profiles;
 create policy profiles_read on profiles for select to authenticated
   using (
     id = auth.uid()
     or can_view_real()
   );
+drop policy if exists profiles_write on profiles;
 create policy profiles_write on profiles for all to authenticated
   using (has_perm('users.manage')) with check (has_perm('users.manage'));
 
 -- Teams
+drop policy if exists teams_read on teams;
 create policy teams_read on teams for select to authenticated using (is_staff());
+drop policy if exists teams_write on teams;
 create policy teams_write on teams for all to authenticated
   using (has_perm('users.manage')) with check (has_perm('users.manage'));
 
 -- Permissions & Overrides
+drop policy if exists perms_read on permissions;
 create policy perms_read on permissions for select to authenticated using (is_staff());
+drop policy if exists roleperm_read on role_permissions;
 create policy roleperm_read on role_permissions for select to authenticated using (is_staff());
+drop policy if exists roleperm_write on role_permissions;
 create policy roleperm_write on role_permissions for all to authenticated
   using (has_perm('users.manage')) with check (has_perm('users.manage'));
+drop policy if exists userperm_read on user_permissions;
 create policy userperm_read on user_permissions for select to authenticated
   using (user_id = auth.uid() or has_perm('users.manage'));
+drop policy if exists userperm_write on user_permissions;
 create policy userperm_write on user_permissions for all to authenticated
   using (has_perm('users.manage')) with check (has_perm('users.manage'));
 
 -- Sites & Secrets
+drop policy if exists sites_read on sites;
 create policy sites_read on sites for select to authenticated using (is_staff());
+drop policy if exists sites_write on sites;
 create policy sites_write on sites for all to authenticated
   using (has_perm('sites.manage')) with check (has_perm('sites.manage'));
+drop policy if exists secrets_all on site_secrets;
 create policy secrets_all on site_secrets for all to authenticated
   using (has_perm('sites.manage')) with check (has_perm('sites.manage'));
 
 -- Bot Rules & Canned Replies
+drop policy if exists rules_read on bot_rules;
 create policy rules_read on bot_rules for select to authenticated using (is_staff());
+drop policy if exists rules_write on bot_rules;
 create policy rules_write on bot_rules for all to authenticated
   using (has_perm('rules.manage')) with check (has_perm('rules.manage'));
+drop policy if exists canned_read on canned_replies;
 create policy canned_read on canned_replies for select to authenticated using (is_staff());
+drop policy if exists canned_write on canned_replies;
 create policy canned_write on canned_replies for all to authenticated
   using (has_perm('canned.manage')) with check (has_perm('canned.manage'));
 
 -- Tickets: all active staff can view tickets and receive Realtime broadcast events
+drop policy if exists tickets_read on tickets;
 create policy tickets_read on tickets for select to authenticated using (is_staff());
+drop policy if exists tickets_update on tickets;
 create policy tickets_update on tickets for update to authenticated using (is_staff()) with check (is_staff());
+drop policy if exists tickets_delete on tickets;
 create policy tickets_delete on tickets for delete to authenticated
   using (can_delete_tickets());
 
 -- Messages: all active staff can view messages and receive Realtime message events
+drop policy if exists messages_read on ticket_messages;
 create policy messages_read on ticket_messages for select to authenticated using (is_staff());
+drop policy if exists events_read on bot_events;
 create policy events_read on bot_events for select to authenticated using (has_perm('dashboard.view'));
 
 -- Replica Identity FULL for complete Realtime change payloads on all staff connections
@@ -466,8 +487,11 @@ begin
     'faq_url', s.faq_url,
     'escalation_alarm_enabled', coalesce(s.escalation_alarm_enabled, (s.theme->>'escalation_alarm_enabled')::boolean, true),
     'bot_chat_enabled', case
+      -- Explicitly OFF takes precedence
+      when s.bot_chat_enabled = false or (s.theme->>'bot_chat_enabled')::boolean = false then false
+      -- Explicitly ON
       when s.bot_chat_enabled = true or (s.theme->>'bot_chat_enabled')::boolean = true then true
-      when s.bot_chat_enabled = false and (s.theme->>'bot_chat_enabled')::boolean = false then false
+      -- Default: check if active bot rules exist
       else exists (select 1 from bot_rules br where (br.site_id = s.id or br.site_id is null) and br.is_active and br.action = 'reply')
     end,
     'rules', (
@@ -490,6 +514,8 @@ begin
 end $$;
 
 -- 2. Widget Create Ticket
+drop function if exists widget_create_ticket(text, text, text, text, text);
+drop function if exists widget_create_ticket(text, text, text, text, text, jsonb);
 create or replace function widget_create_ticket(
   p_site_key text,
   p_name text,
@@ -574,6 +600,8 @@ grant execute on function widget_create_ticket(text, text, text, text, text, jso
 grant execute on function widget_create_ticket(text, text, text, text) to anon, authenticated;
 
 -- 3. Widget Update Visitor Info
+drop function if exists widget_update_visitor_info(uuid, text, text, text, text);
+drop function if exists widget_update_visitor_info(uuid, text, text, text, text, jsonb);
 create or replace function widget_update_visitor_info(
   p_token uuid,
   p_name text default null,
@@ -650,6 +678,8 @@ end $$;
 grant execute on function widget_update_visitor_info(uuid, text, text, text, text, jsonb) to anon, authenticated;
 
 -- 4. Widget Escalate to Team (rings alarm immediately)
+drop function if exists widget_escalate_to_team(text, text, text);
+drop function if exists widget_escalate_to_team(text, text, text, jsonb);
 create or replace function widget_escalate_to_team(
   p_site_key text,
   p_token text default null,
@@ -734,8 +764,11 @@ begin
   if char_length(clean_q) not between 1 and 4000 then raise exception 'Message too long or empty'; end if;
 
   is_bot_on := case
+    -- Explicitly OFF takes precedence
+    when s.bot_chat_enabled = false or (s.theme->>'bot_chat_enabled')::boolean = false then false
+    -- Explicitly ON
     when s.bot_chat_enabled = true or (s.theme->>'bot_chat_enabled')::boolean = true then true
-    when s.bot_chat_enabled = false and (s.theme->>'bot_chat_enabled')::boolean = false then false
+    -- Default: check if active bot rules exist
     else exists (select 1 from bot_rules br where (br.site_id = s.id or br.site_id is null) and br.is_active and br.action = 'reply')
   end;
 
@@ -1258,7 +1291,7 @@ begin
     new.id,
     coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
     coalesce(new.raw_user_meta_data->>'pseudo_name', 'staff-' || substr(replace(new.id::text, '-', ''), 1, 8)),
-    (case when exists (select 1 from profiles) then 'employee' else 'admin' end)::app_role
+    (case when exists (select 1 from profiles) then 'employee' else 'developer' end)::app_role
   )
   on conflict (id) do nothing;
   return new;
@@ -1320,6 +1353,10 @@ on conflict (key) do nothing;
 -- Role Default Permissions
 insert into role_permissions(role, permission)
   select 'admin', key from permissions
+on conflict do nothing;
+
+insert into role_permissions(role, permission)
+  select 'developer', key from permissions
 on conflict do nothing;
 
 insert into role_permissions(role, permission)

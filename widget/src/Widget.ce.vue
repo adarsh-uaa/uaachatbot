@@ -175,15 +175,27 @@ const botChatEnabled = computed(() => {
   }
 
   // 3. Database site settings & theme from widget_config
+  // Explicitly OFF takes precedence
   const c1 = checkVal(cfg.value?.bot_chat_enabled)
   const c2 = checkVal(cfg.value?.theme?.bot_chat_enabled)
+  if (c1 === false || c2 === false) return false
   if (c1 === true || c2 === true) return true
-  if (c1 === false && c2 === false) return false
 
-  // 4. Default: If site has active keyword rules configured, always ENABLE bot auto-replies!
+  // 4. Default: If site has active keyword rules configured, enable bot auto-replies
   if (cfg.value?.rules && cfg.value.rules.length > 0) return true
 
-  return true
+  return false
+})
+
+watch(botChatEnabled, (enabled) => {
+  if (mode.value !== 'chat') {
+    mode.value = enabled ? 'bot' : 'form'
+    if (!enabled) {
+      msgs.value = []
+    } else if (msgs.value.length === 0 && cfg.value?.texts?.greeting) {
+      msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
+    }
+  }
 })
 
 const buttons = computed(() => {
@@ -277,6 +289,10 @@ function getBotHistoryPayload() {
 }
 
 function handlePillClick(rule) {
+  if (!botChatEnabled.value) {
+    startForm(rule.button_label || rule.name)
+    return
+  }
   push('me', rule.button_label)
 
   // 1. If rule is explicit handoff to human staff ("Talk to our team")
@@ -302,6 +318,10 @@ function handlePillClick(rule) {
 }
 
 async function ask(text, rule) {
+  if (!botChatEnabled.value) {
+    startForm(text)
+    return
+  }
   push('me', text)
   busy.value = true
 
@@ -537,7 +557,7 @@ async function poll() {
   }
 }
 function setInitialMode() {
-  mode.value = 'bot'
+  mode.value = botChatEnabled.value ? 'bot' : 'form'
 }
 function startPolling() {
   stopPolling()
@@ -564,10 +584,10 @@ function newChat() {
   localStorage.removeItem(storeKey())
   token = null
   live.value = { messages: [], status: 'open' }
-  setInitialMode()
   lastCount = 0
   msgs.value = []
-  if (cfg.value?.texts?.greeting) {
+  setInitialMode()
+  if (botChatEnabled.value && cfg.value?.texts?.greeting) {
     msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
   }
   form.name = ''
@@ -586,7 +606,8 @@ onMounted(async () => {
   }
   try {
     cfg.value = await rpc('widget_config', { p_site_key: props.siteKey })
-    if (cfg.value?.texts?.greeting) {
+    setInitialMode()
+    if (botChatEnabled.value && cfg.value?.texts?.greeting) {
       msgs.value.push({ from: 'bot', text: cfg.value.texts.greeting })
     }
     if (cfg.value?.theme?.defaultCountryCode) {

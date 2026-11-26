@@ -290,7 +290,7 @@ onBeforeUnmount(() => {
     <ClientOnly>
       <Teleport to="body">
         <div v-if="alarm.isSettingsOpen.value" class="alarm-modal-backdrop" @click="alarm.isSettingsOpen.value = false">
-          <div class="alarm-modal card" @click.stop>
+          <div class="alarm-modal" @click.stop>
             <div class="alarm-modal-header">
               <div class="alarm-modal-title">
                 <span style="font-size:1.4rem;flex-shrink:0">🚨</span>
@@ -765,7 +765,7 @@ onBeforeUnmount(() => {
 }
 .alarm-controls-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1rem;
   margin-bottom: 1rem;
   width: 100%;
